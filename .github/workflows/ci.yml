@@ -1,42 +1,45 @@
 # GitHub Actions 工作流名称
-name: C++ CI
+name: C++ CI (Build, Format & Analyze)
 
 # 工作流触发条件
 on:
-  # 当有代码推送到任何分支时触发
   push:
-    branches: [ "main", "master" ]
-  # 当有 Pull Request 指向 main 或 master 分支时触发
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
 
 # 定义一系列任务（jobs）
 jobs:
-  # 任务ID，可以自定义
-  build:
+  build-and-analyze:
     # 指定运行此任务的操作系统环境
     runs-on: windows-latest
 
     # 任务执行的步骤
     steps:
-    # 步骤1: 检出代码
-    # 使用官方的 actions/checkout 动作来获取仓库代码
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      # 步骤1: 检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # 步骤2: 设置 MSVC 开发环境
-    # 使用微软官方的 setup-msbuild 动作为后续的编译步骤准备好环境
-    - name: Setup MSVC
-      uses: microsoft/setup-msbuild@v1.1
+      # 步骤2: 检查代码格式 (修正版)
+      # 我们直接调用 runner 上已安装的 clang-format，而不是使用基于 Docker 的插件。
+      - name: Check Code Formatting
+        run: |
+          # 使用 git ls-files 找到所有被 Git 跟踪的相关文件
+          # --dry-run: 不修改文件，只报告需要更改的地方。
+          # -Werror: 将需要格式化的警告视为错误，如果任何文件格式不正确，此步骤就会失败。
+          # -style=file: 使用项目根目录下的 .clang-format 文件作为规则。
+          clang-format -style=file --dry-run -Werror $(git ls-files 'src/*.cpp' 'src/*.h' 'include/*.h')
+        # 明确使用 bash shell 来确保命令的一致性
+        shell: bash
 
-    # 步骤3: 配置 CMake
-    # -p build: 在 build 子目录中执行后续命令
-    # cmake .. : 指向上一级目录的 CMakeLists.txt
-    - name: Configure CMake
-      run: cmake -B build -G "Visual Studio 17 2022" -A x64
-      
-    # 步骤4: 编译项目
-    # --build build: 指定编译 build 目录
-    # --config Release: 指定编译 Release 配置
-    - name: Build Project
-      run: cmake --build build --config Release
+      # 步骤3: 设置 MSVC 开发环境
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v1.1
+
+      # 步骤4: 配置 CMake
+      - name: Configure CMake
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+
+      # 步骤5: 编译项目并执行静态分析
+      - name: Build Project & Run Static Analysis
+        run: cmake --build build --config Release -- /p:RunCodeAnalysis=true /p:CodeAnalysisTreatWarningsAsErrors=true

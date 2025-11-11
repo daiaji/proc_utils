@@ -7,7 +7,7 @@ on:
     # 仅当推送的 ref 是以 'v' 开头的标签时才触发
     # 例如：git tag v1.0.0; git push origin v1.0.0
     tags:
-      - 'v*'
+      - "v*"
 
 # 定义任务
 jobs:
@@ -18,50 +18,50 @@ jobs:
 
     # 任务步骤
     steps:
-    # 步骤1: 检出代码
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      # 步骤1: 检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # 步骤2: 设置 MSVC 开发环境
-    - name: Setup MSVC
-      uses: microsoft/setup-msbuild@v1.1
+      # 步骤2: 设置 MSVC 开发环境
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v1.1
 
-    # 步骤3: 配置 CMake
-    - name: Configure CMake
-      run: cmake -B build -G "Visual Studio 17 2022" -A x64
+      # 步骤3: 配置 CMake
+      - name: Configure CMake
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
 
-    # 步骤4: 编译项目
-    - name: Build Project
-      run: cmake --build build --config Release
-    
-    # 步骤5: 准备发布包
-    # 创建一个目录用于存放最终要打包的文件
-    # 将编译好的 dll, lib 和公开的头文件复制到该目录
-    - name: Prepare Release Package
-      run: |
-        mkdir release_package
-        copy "build\Release\proc_utils.dll" "release_package\"
-        copy "build\Release\proc_utils.lib" "release_package\"
-        copy "include\proc_utils.h" "release_package\"
-        
-    # 步骤6: 将发布包打包成 Zip 文件
-    # 使用 PowerShell 的 Compress-Archive 命令创建 zip
-    # ${{ github.ref_name }} 是一个内置变量，它代表触发工作流的标签名 (例如 v1.0.0)
-    - name: Create Zip Archive
-      run: Compress-Archive -Path "release_package\*" -DestinationPath "proc_utils-${{ github.ref_name }}.zip"
+      # 步骤4: 编译项目
+      - name: Build Project
+        run: cmake --build build --config Release
 
-    # 步骤7: 创建 GitHub Release
-    # 使用 softprops/action-gh-release 动作来自动创建发布
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        # 要上传的文件，即我们上一步创建的 zip 文件
-        files: "proc_utils-${{ github.ref_name }}.zip"
-        # Release 的名称会自动设置为标签名
-        name: "Release ${{ github.ref_name }}"
-        # 你可以在创建tag时写好release note，这里会自动填充
-        body_path: ""
-        # 草稿状态，设置为 false 表示直接发布
-        draft: false
-        # 预发布状态，设置为 false 表示是正式版
-        prerelease: false
+      # 步骤5: 准备发布包
+      # 创建一个目录用于存放最终要打包的文件
+      # 将编译好的 dll, lib 和公开的头文件复制到该目录
+      - name: Prepare Release Package
+        run: |
+          mkdir release_package
+          copy "build\Release\proc_utils.dll" "release_package\"
+          copy "build\Release\proc_utils.lib" "release_package\"
+          copy "include\proc_utils.h" "release_package\"
+
+      # 步骤6: 将发布包打包成 Zip 文件
+      # 使用 PowerShell 的 Compress-Archive 命令创建 zip
+      # ${{ github.ref_name }} 是一个内置变量，它代表触发工作流的标签名 (例如 v1.0.0)
+      - name: Create Zip Archive
+        run: Compress-Archive -Path "release_package\*" -DestinationPath "proc_utils-${{ github.ref_name }}.zip"
+
+      # 步骤7: 创建 GitHub Release
+      # 使用 softprops/action-gh-release 动作来自动创建发布
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          # 要上传的文件，即我们上一步创建的 zip 文件
+          files: "proc_utils-${{ github.ref_name }}.zip"
+          # Release 的名称会自动设置为标签名
+          name: "Release ${{ github.ref_name }}"
+          # 你可以在创建tag时写好release note，这里会自动填充
+          body_path: ""
+          # 草稿状态，设置为 false 表示直接发布
+          draft: false
+          # 预发布状态，设置为 false 表示是正式版
+          prerelease: false
