@@ -1,0 +1,42 @@
+# GitHub Actions 工作流名称
+name: C++ CI
+
+# 工作流触发条件
+on:
+  # 当有代码推送到任何分支时触发
+  push:
+    branches: [ "main", "master" ]
+  # 当有 Pull Request 指向 main 或 master 分支时触发
+  pull_request:
+    branches: [ "main", "master" ]
+
+# 定义一系列任务（jobs）
+jobs:
+  # 任务ID，可以自定义
+  build:
+    # 指定运行此任务的操作系统环境
+    runs-on: windows-latest
+
+    # 任务执行的步骤
+    steps:
+    # 步骤1: 检出代码
+    # 使用官方的 actions/checkout 动作来获取仓库代码
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # 步骤2: 设置 MSVC 开发环境
+    # 使用微软官方的 setup-msbuild 动作为后续的编译步骤准备好环境
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v1.1
+
+    # 步骤3: 配置 CMake
+    # -p build: 在 build 子目录中执行后续命令
+    # cmake .. : 指向上一级目录的 CMakeLists.txt
+    - name: Configure CMake
+      run: cmake -B build -G "Visual Studio 17 2022" -A x64
+      
+    # 步骤4: 编译项目
+    # --build build: 指定编译 build 目录
+    # --config Release: 指定编译 Release 配置
+    - name: Build Project
+      run: cmake --build build --config Release
