@@ -99,7 +99,6 @@ DWORD GetParentProcessId(DWORD child_pid)
 bool WaitForProcess(const wchar_t* process_name_or_pid, int timeout_ms, bool wait_for_close, DWORD* out_pid)
 {
     const bool wait_indefinitely = timeout_ms < 0;
-    // 修正: 使用 GetTickCount64 防止溢出
     const ULONGLONG start_time = GetTickCount64();
 
     DWORD initial_pid = FindProcess(process_name_or_pid);
@@ -115,7 +114,6 @@ bool WaitForProcess(const wchar_t* process_name_or_pid, int timeout_ms, bool wai
             return true;
         }
 
-        // 修正: 使用 GetTickCount64 防止溢出
         if (!wait_indefinitely && (GetTickCount64() - start_time >= (DWORD)timeout_ms)) {
             SetLastError(WAIT_TIMEOUT);
             break;

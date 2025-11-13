@@ -12,7 +12,6 @@ void ProcUtils_MsgWait(int duration_ms)
     if (g_procutils_should_exit.load(std::memory_order_relaxed))
         return;
 
-    // 修正: 使用 GetTickCount64 防止溢出
     ULONGLONG start_time = GetTickCount64();
     DWORD wait_time = (duration_ms < 0) ? 0 : 1;
 
@@ -30,7 +29,6 @@ void ProcUtils_MsgWait(int duration_ms)
         }
         if (duration_ms <= 0)
             break;
-        // 修正: 使用 GetTickCount64 防止溢出
     } while (GetTickCount64() - start_time < (DWORD)duration_ms);
 }
 
