@@ -1,5 +1,5 @@
 # GitHub Actions 工作流名称
-name: C++ CI (Build, Format & Analyze)
+name: C++ CI (Build, Format, Analyze & Test) # <-- 名称更新
 
 # 工作流触发条件
 on:
@@ -10,7 +10,7 @@ on:
 
 # 定义一系列任务（jobs）
 jobs:
-  build-and-analyze:
+  build-analyze-and-test: # <-- Job 名称更新
     # 指定运行此任务的操作系统环境
     runs-on: windows-latest
 
@@ -20,16 +20,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 步骤2: 检查代码格式 (修正版)
-      # 我们直接调用 runner 上已安装的 clang-format，而不是使用基于 Docker 的插件。
+      # 步骤2: 检查代码格式
       - name: Check Code Formatting
         run: |
-          # 使用 git ls-files 找到所有被 Git 跟踪的相关文件
-          # --dry-run: 不修改文件，只报告需要更改的地方。
-          # -Werror: 将需要格式化的警告视为错误，如果任何文件格式不正确，此步骤就会失败。
-          # -style=file: 使用项目根目录下的 .clang-format 文件作为规则。
           clang-format -style=file --dry-run -Werror $(git ls-files 'src/*.cpp' 'src/*.h' 'include/*.h')
-        # 明确使用 bash shell 来确保命令的一致性
         shell: bash
 
       # 步骤3: 设置 MSVC 开发环境
@@ -43,3 +37,10 @@ jobs:
       # 步骤5: 编译项目并执行静态分析
       - name: Build Project & Run Static Analysis
         run: cmake --build build --config Release -- /p:RunCodeAnalysis=true /p:CodeAnalysisTreatWarningsAsErrors=true
+        
+      # --- 新增步骤：运行测试 ---
+      - name: Run Python Test Suite
+        # Runner 默认已安装 Python
+        # 我们将编译输出目录 ('build/Release')作为参数传递给测试脚本
+        run: python tests/run_tests.py build/Release
+        shell: bash
