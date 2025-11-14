@@ -1,16 +1,31 @@
-﻿#pragma once
+#pragma once
 
+// --- Preprocessor Definitions ---
 #define WIN32_LEAN_AND_MEAN
 #define _CRT_SECURE_NO_WARNINGS
 
+// --- Windows System Headers (in correct order) ---
 #include <windows.h>
 
-#include <atomic>
 #include <psapi.h>
 #include <tlhelp32.h>
-#include <vector> // 为 ProcUtils_Exec 的 RAII 实现引入
 
-// RAII 包装器，用于自动管理 HANDLE
+// --- C++ Standard Library Headers ---
+#include <atomic>
+#include <functional>
+#include <string> // For std::to_wstring in C++ wrapper
+#include <vector>
+
+// --- C Standard Library Headers ---
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#include <cwctype>
+
+// --- Project Public Header ---
+#include "proc_utils.h"
+
+// --- RAII Wrapper ---
 class ScopedHandle {
  public:
     explicit ScopedHandle(HANDLE h = INVALID_HANDLE_VALUE) : handle_(h)
@@ -23,11 +38,9 @@ class ScopedHandle {
         }
     }
 
-    // 禁止拷贝
     ScopedHandle(const ScopedHandle&) = delete;
     ScopedHandle& operator=(const ScopedHandle&) = delete;
 
-    // 允许移动
     ScopedHandle(ScopedHandle&& other) noexcept : handle_(other.handle_)
     {
         other.handle_ = INVALID_HANDLE_VALUE;
@@ -54,24 +67,19 @@ class ScopedHandle {
 
  private:
     HANDLE handle_;
-}; // <--- 修正：添加了分号
+};
 
-// 全局退出标志，改为原子类型以支持多线程
+// --- Global Variables & Forward Declarations ---
 extern std::atomic<bool> g_procutils_should_exit;
 
-// 极简的非阻塞等待函数
 void ProcUtils_MsgWait(int duration_ms);
 
-// 内部实现函数的命名空间
 namespace ProcUtils::Internal {
+bool ForEachProcess(const std::function<bool(const PROCESSENTRY32W&)>& callback);
 DWORD FindProcess(const wchar_t* process_name_or_pid);
-
-int FindAllProcesses(const wchar_t* process_name, unsigned int* out_pids, int pids_array_size); // <-- 新增
-
-DWORD GetProcessPath(DWORD process_id, wchar_t* buffer, DWORD buffer_size);
-
+int FindAllProcesses(const wchar_t* process_name, unsigned int* out_pids, int pids_array_size);
+DWORD GetProcessPath(DWORD process_id, wchar_t* buffer, DWORD buffer_size, HANDLE existing_process_handle = NULL);
 DWORD GetParentProcessId(DWORD child_pid);
-
 bool WaitForProcess(const wchar_t* process_name_or_pid, int timeout_ms, bool wait_for_close, DWORD* out_pid);
-
+bool GetProcessInfo(DWORD pid, ProcUtils_ProcessInfo* out_info);
 } // namespace ProcUtils::Internal

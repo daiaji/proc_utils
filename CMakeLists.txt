@@ -8,9 +8,11 @@ project(proc_utils CXX)
 # 默认构建动态库，除非外部设置了 BUILD_SHARED_LIBS=OFF
 option(BUILD_SHARED_LIBS "Build shared libraries (.dll)" ON)
 
+# --- 修正：确保所有源文件都被编译 ---
 add_library(proc_utils
     src/proc_utils_core.cpp
     src/proc_utils_impl.cpp
+    src/proc_utils_info.cpp   # <-- 将这个源文件添加到编译列表中
 )
 
 # 当构建动态库时，需要定义 PROC_UTILS_EXPORTS 宏

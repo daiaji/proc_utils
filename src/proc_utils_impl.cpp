@@ -1,27 +1,53 @@
-﻿#include <cstdlib>
-#include <cstring> // For _wcsicmp on MSVC
-#include <cwchar>  // For wcstol
-
-#include "proc_utils_internal.h"
+﻿#include "proc_utils_internal.h"
 
 namespace ProcUtils::Internal {
-DWORD GetProcessPath(DWORD process_id, wchar_t* buffer, DWORD buffer_size)
+
+bool ForEachProcess(const std::function<bool(const PROCESSENTRY32W&)>& callback)
+{
+    ScopedHandle h_snap(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+    if (!h_snap.IsValid()) {
+        return false;
+    }
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(PROCESSENTRY32W);
+
+    if (Process32FirstW(h_snap, &pe)) {
+        do {
+            if (callback(pe)) {
+                break;
+            }
+        } while (Process32NextW(h_snap, &pe));
+    }
+    return true;
+}
+
+DWORD GetProcessPath(DWORD process_id, wchar_t* buffer, DWORD buffer_size, HANDLE existing_process_handle)
 {
     *buffer = L'\0';
-    ScopedHandle h_proc(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
-    if (!h_proc.IsValid())
-        return 0;
+    ScopedHandle h_proc;
+    HANDLE process_handle = existing_process_handle;
 
-    DWORD path_length = GetProcessImageFileNameW(h_proc, buffer, buffer_size);
+    if (!process_handle) {
+        h_proc = ScopedHandle(OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process_id));
+        if (!h_proc.IsValid())
+            return 0;
+        process_handle = h_proc;
+    }
+
+    DWORD path_length = buffer_size;
+    if (QueryFullProcessImageNameW(process_handle, 0, buffer, &path_length)) {
+        return path_length;
+    }
+
+    path_length = GetProcessImageFileNameW(process_handle, buffer, buffer_size);
     if (path_length) {
         wchar_t device_path[MAX_PATH];
         wchar_t drive_letter[3] = L"A:";
-
         DWORD drive_mask = GetLogicalDrives();
         for (int i = 0; i < 26; ++i) {
             if (!(drive_mask & (1 << i)))
                 continue;
-
             drive_letter[0] = L'A' + i;
             if (QueryDosDeviceW(drive_letter, device_path, _countof(device_path)) > 2) {
                 size_t device_path_len = wcslen(device_path);
@@ -45,82 +71,56 @@ DWORD FindProcess(const wchar_t* process_name_or_pid)
         return 0;
     }
 
-    DWORD pid = 0;
     wchar_t* end_ptr;
-    pid = wcstol(process_name_or_pid, &end_ptr, 10);
-    if (*end_ptr != L'\0') {
-        pid = 0;
-    }
+    DWORD target_pid = wcstol(process_name_or_pid, &end_ptr, 10);
+    bool is_pid_search = (*end_ptr == L'\0');
 
-    ScopedHandle h_snap(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
-    if (!h_snap.IsValid())
-        return 0;
-
-    PROCESSENTRY32W pe;
-    pe.dwSize = sizeof(PROCESSENTRY32W);
-
-    if (Process32FirstW(h_snap, &pe)) {
-        do {
-            if (pid) {
-                if (pe.th32ProcessID == pid) {
-                    return pid;
-                }
+    DWORD found_pid = 0;
+    ForEachProcess([&](const PROCESSENTRY32W& pe) {
+        if (is_pid_search) {
+            if (pe.th32ProcessID == target_pid) {
+                found_pid = pe.th32ProcessID;
+                return true;
             }
-            else {
-                if (_wcsicmp(pe.szExeFile, process_name_or_pid) == 0) {
-                    return pe.th32ProcessID;
-                }
+        }
+        else {
+            if (_wcsicmp(pe.szExeFile, process_name_or_pid) == 0) {
+                found_pid = pe.th32ProcessID;
+                return true;
             }
-        } while (Process32NextW(h_snap, &pe));
-    }
-    return 0;
+        }
+        return false;
+    });
+    return found_pid;
 }
 
-// --- 新增函数实现 ---
 int FindAllProcesses(const wchar_t* process_name, unsigned int* out_pids, int pids_array_size)
 {
-    ScopedHandle h_snap(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
-    if (!h_snap.IsValid()) {
-        // CreateToolhelp32Snapshot 会设置 LastError
-        return -1;
-    }
-
-    PROCESSENTRY32W pe;
-    pe.dwSize = sizeof(PROCESSENTRY32W);
     int found_count = 0;
-
-    if (Process32FirstW(h_snap, &pe)) {
-        do {
-            if (_wcsicmp(pe.szExeFile, process_name) == 0) {
-                if (found_count < pids_array_size) {
-                    out_pids[found_count] = pe.th32ProcessID;
-                }
-                found_count++;
+    bool success = ForEachProcess([&](const PROCESSENTRY32W& pe) {
+        if (_wcsicmp(pe.szExeFile, process_name) == 0) {
+            if (found_count < pids_array_size) {
+                out_pids[found_count] = pe.th32ProcessID;
             }
-        } while (Process32NextW(h_snap, &pe));
-    }
-    // 如果 Process32FirstW 失败, 且不是因为列表为空, GetLastError() 会有值
-    // 但通常我们只关心找到了多少, 0 是一个有效的结果
-    return found_count;
+            found_count++;
+        }
+        return false;
+    });
+
+    return success ? found_count : -1;
 }
 
 DWORD GetParentProcessId(DWORD child_pid)
 {
-    ScopedHandle h_snap(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
-    if (!h_snap.IsValid())
-        return 0;
-
-    PROCESSENTRY32W pe;
-    pe.dwSize = sizeof(PROCESSENTRY32W);
-
-    if (Process32FirstW(h_snap, &pe)) {
-        do {
-            if (pe.th32ProcessID == child_pid) {
-                return pe.th32ParentProcessID;
-            }
-        } while (Process32NextW(h_snap, &pe));
-    }
-    return 0;
+    DWORD parent_pid = 0;
+    ForEachProcess([&](const PROCESSENTRY32W& pe) {
+        if (pe.th32ProcessID == child_pid) {
+            parent_pid = pe.th32ParentProcessID;
+            return true;
+        }
+        return false;
+    });
+    return parent_pid;
 }
 
 bool WaitForProcess(const wchar_t* process_name_or_pid, int timeout_ms, bool wait_for_close, DWORD* out_pid)

@@ -1,8 +1,4 @@
-﻿#include <cstdlib>
-#include <cwctype> // for towupper
-
-#include "proc_utils.h"
-#include "proc_utils_internal.h"
+﻿#include "proc_utils_internal.h"
 
 // 定义全局原子标志
 std::atomic<bool> g_procutils_should_exit(false);
@@ -32,35 +28,22 @@ void ProcUtils_MsgWait(int duration_ms)
     } while (GetTickCount64() - start_time < (DWORD)duration_ms);
 }
 
-namespace { // 匿名命名空间，用于文件内私有函数
-
+namespace {
 void TerminateProcessTree(DWORD process_id)
 {
-    ScopedHandle h_snap(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
-    if (!h_snap.IsValid())
-        return;
+    ProcUtils::Internal::ForEachProcess([&](const PROCESSENTRY32W& pe) {
+        if (pe.th32ParentProcessID == process_id) {
+            TerminateProcessTree(pe.th32ProcessID);
+        }
+        return false;
+    });
 
-    PROCESSENTRY32W pe;
-    pe.dwSize = sizeof(PROCESSENTRY32W);
-
-    if (Process32FirstW(h_snap, &pe)) {
-        do {
-            if (pe.th32ParentProcessID == process_id) {
-                TerminateProcessTree(pe.th32ProcessID); // 递归终止子进程
-            }
-        } while (Process32NextW(h_snap, &pe));
-    }
-
-    // 杀死所有子进程后，再杀死自身
     ScopedHandle h_proc(OpenProcess(PROCESS_TERMINATE, FALSE, process_id));
     if (h_proc.IsValid()) {
         TerminateProcess(h_proc, 1);
     }
 }
-
 } // anonymous namespace
-
-// --- 导出的 C API 实现 (已重构) ---
 
 extern "C" {
 
@@ -70,32 +53,25 @@ PROC_UTILS_API unsigned int ProcUtils_ProcessExists(const wchar_t* process_name_
         SetLastError(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    // FindProcess 失败本身不设置错误码，因为它只是“未找到”，而不是“错误”
     return ProcUtils::Internal::FindProcess(process_name_or_pid);
 }
 
 PROC_UTILS_API bool ProcUtils_ProcessClose(const wchar_t* process_name_or_pid, unsigned int exit_code)
 {
-    // 重构点: 直接查找，减少一次遍历，并统一错误处理
-    DWORD pid = ProcUtils_ProcessExists(process_name_or_pid);
+    DWORD pid = ProcUtils::Internal::FindProcess(process_name_or_pid);
     if (!pid) {
         SetLastError(ERROR_NOT_FOUND);
         return false;
     }
-
-    // OpenProcess 失败时会自动设置 LastError
     ScopedHandle h_process(OpenProcess(PROCESS_TERMINATE, FALSE, pid));
     if (!h_process.IsValid()) {
         return false;
     }
-
-    // TerminateProcess 失败时会自动设置 LastError
     return ::TerminateProcess(h_process, exit_code);
 }
 
 PROC_UTILS_API unsigned int ProcUtils_ProcessWait(const wchar_t* process_name, int timeout_ms)
 {
-    // 重构点: 增加参数校验
     if (!process_name || !*process_name) {
         SetLastError(ERROR_INVALID_PARAMETER);
         return 0;
@@ -104,13 +80,11 @@ PROC_UTILS_API unsigned int ProcUtils_ProcessWait(const wchar_t* process_name, i
     if (ProcUtils::Internal::WaitForProcess(process_name, timeout_ms, false, &found_pid)) {
         return found_pid;
     }
-    // WaitForProcess 内部在超时时会设置 WAIT_TIMEOUT
     return 0;
 }
 
 PROC_UTILS_API bool ProcUtils_ProcessWaitClose(const wchar_t* process_name_or_pid, int timeout_ms)
 {
-    // 重构点: 增加参数校验
     if (!process_name_or_pid || !*process_name_or_pid) {
         SetLastError(ERROR_INVALID_PARAMETER);
         return false;
@@ -124,7 +98,6 @@ PROC_UTILS_API bool ProcUtils_ProcessGetPath(unsigned int pid, wchar_t* out_path
         SetLastError(ERROR_INVALID_PARAMETER);
         return false;
     }
-    // GetProcessPath 失败时，其内部的 OpenProcess 会设置 LastError
     return ProcUtils::Internal::GetProcessPath(pid, out_path, path_size) > 0;
 }
 
@@ -135,40 +108,25 @@ PROC_UTILS_API unsigned int ProcUtils_Exec(const wchar_t* command, const wchar_t
         SetLastError(ERROR_INVALID_PARAMETER);
         return 0;
     }
-
     STARTUPINFOW si = {sizeof(si)};
     PROCESS_INFORMATION pi;
-
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = static_cast<WORD>(show_mode);
-
     if (desktop_name && *desktop_name) {
         si.lpDesktop = const_cast<LPWSTR>(desktop_name);
     }
-
-    // 重构点: 使用 std::vector 代替 _wcsdup/free，实现RAII
     std::vector<wchar_t> cmd_buffer(command, command + wcslen(command) + 1);
-
-    // CreateProcessW 失败时会自动设置 LastError
-    BOOL created =
-        CreateProcessW(nullptr, cmd_buffer.data(), nullptr, nullptr, FALSE, 0, nullptr, working_dir, &si, &pi);
-
-    if (!created)
+    if (!CreateProcessW(nullptr, cmd_buffer.data(), nullptr, nullptr, FALSE, 0, nullptr, working_dir, &si, &pi))
         return 0;
 
     ScopedHandle hProcess(pi.hProcess);
     ScopedHandle hThread(pi.hThread);
-
     if (wait) {
-        // ... (等待逻辑无变化)
         while (!g_procutils_should_exit.load(std::memory_order_relaxed)) {
             HANDLE process_handle = hProcess;
             DWORD wait_result = MsgWaitForMultipleObjects(1, &process_handle, FALSE, INFINITE, QS_ALLINPUT);
-
-            if (wait_result == WAIT_OBJECT_0) {
-                break; // 进程结束
-            }
-
+            if (wait_result == WAIT_OBJECT_0)
+                break;
             if (wait_result == WAIT_OBJECT_0 + 1) {
                 MSG msg;
                 while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
@@ -182,23 +140,21 @@ PROC_UTILS_API unsigned int ProcUtils_Exec(const wchar_t* command, const wchar_t
                 }
             }
             else {
-                break; // 等待失败
+                break;
             }
         }
     }
-
     return pi.dwProcessId;
 }
 
 PROC_UTILS_API unsigned int ProcUtils_ProcessGetParent(const wchar_t* process_name_or_pid)
 {
-    // 重构点: 统一错误处理
-    DWORD pid = ProcUtils_ProcessExists(process_name_or_pid);
-    if (!pid) {
+    DWORD child_pid = ProcUtils::Internal::FindProcess(process_name_or_pid);
+    if (!child_pid) {
         SetLastError(ERROR_NOT_FOUND);
         return 0;
     }
-    return ProcUtils::Internal::GetParentProcessId(pid);
+    return ProcUtils::Internal::GetParentProcessId(child_pid);
 }
 
 PROC_UTILS_API bool ProcUtils_ProcessSetPriority(const wchar_t* process_name_or_pid, wchar_t priority)
@@ -227,37 +183,30 @@ PROC_UTILS_API bool ProcUtils_ProcessSetPriority(const wchar_t* process_name_or_
         SetLastError(ERROR_INVALID_PARAMETER);
         return false;
     }
-
-    // 重构点: 统一错误处理
-    DWORD pid = ProcUtils_ProcessExists(process_name_or_pid);
+    DWORD pid = ProcUtils::Internal::FindProcess(process_name_or_pid);
     if (!pid) {
         SetLastError(ERROR_NOT_FOUND);
         return false;
     }
-
     ScopedHandle h_process(OpenProcess(PROCESS_SET_INFORMATION, FALSE, pid));
     if (!h_process.IsValid())
         return false;
-
     return SetPriorityClass(h_process, priority_class);
 }
 
 PROC_UTILS_API bool ProcUtils_ProcessCloseTree(const wchar_t* process_name_or_pid)
 {
-    // 重构点: 统一错误处理
-    DWORD pid = ProcUtils_ProcessExists(process_name_or_pid);
+    DWORD pid = ProcUtils::Internal::FindProcess(process_name_or_pid);
     if (!pid) {
         SetLastError(ERROR_NOT_FOUND);
         return false;
     }
-
     TerminateProcessTree(pid);
-    return true; // 假设总是成功，因为 TerminateProcess 的失败在这里难以追踪
+    return true;
 }
 
 PROC_UTILS_API int ProcUtils_FindAllProcesses(const wchar_t* process_name, unsigned int* out_pids, int pids_array_size)
 {
-    // 新增 API 实现
     if (!process_name || !*process_name || !out_pids || pids_array_size < 0) {
         SetLastError(ERROR_INVALID_PARAMETER);
         return -1;
