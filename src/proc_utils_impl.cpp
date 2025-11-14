@@ -41,7 +41,6 @@ DWORD GetProcessPath(DWORD process_id, wchar_t* buffer, DWORD buffer_size)
 
 DWORD FindProcess(const wchar_t* process_name_or_pid)
 {
-    // 修正: 增加空指针和空字符串检查，防止 _wcsicmp 崩溃
     if (!process_name_or_pid || !*process_name_or_pid) {
         return 0;
     }
@@ -49,7 +48,7 @@ DWORD FindProcess(const wchar_t* process_name_or_pid)
     DWORD pid = 0;
     wchar_t* end_ptr;
     pid = wcstol(process_name_or_pid, &end_ptr, 10);
-    if (*end_ptr != L'\0') { // 包含非数字字符，视为进程名
+    if (*end_ptr != L'\0') {
         pid = 0;
     }
 
@@ -62,19 +61,47 @@ DWORD FindProcess(const wchar_t* process_name_or_pid)
 
     if (Process32FirstW(h_snap, &pe)) {
         do {
-            if (pid) { // 按PID查找
+            if (pid) {
                 if (pe.th32ProcessID == pid) {
                     return pid;
                 }
             }
-            else { // 按名称查找
+            else {
                 if (_wcsicmp(pe.szExeFile, process_name_or_pid) == 0) {
                     return pe.th32ProcessID;
                 }
             }
         } while (Process32NextW(h_snap, &pe));
     }
-    return 0; // 未找到
+    return 0;
+}
+
+// --- 新增函数实现 ---
+int FindAllProcesses(const wchar_t* process_name, unsigned int* out_pids, int pids_array_size)
+{
+    ScopedHandle h_snap(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+    if (!h_snap.IsValid()) {
+        // CreateToolhelp32Snapshot 会设置 LastError
+        return -1;
+    }
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(PROCESSENTRY32W);
+    int found_count = 0;
+
+    if (Process32FirstW(h_snap, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, process_name) == 0) {
+                if (found_count < pids_array_size) {
+                    out_pids[found_count] = pe.th32ProcessID;
+                }
+                found_count++;
+            }
+        } while (Process32NextW(h_snap, &pe));
+    }
+    // 如果 Process32FirstW 失败, 且不是因为列表为空, GetLastError() 会有值
+    // 但通常我们只关心找到了多少, 0 是一个有效的结果
+    return found_count;
 }
 
 DWORD GetParentProcessId(DWORD child_pid)
@@ -124,17 +151,15 @@ bool WaitForProcess(const wchar_t* process_name_or_pid, int timeout_ms, bool wai
             if (proc_handle.IsValid()) {
                 HANDLE raw_proc_handle = proc_handle;
                 DWORD wait_result = MsgWaitForMultipleObjects(1, &raw_proc_handle, FALSE, 100, QS_ALLINPUT);
-                if (wait_result == WAIT_OBJECT_0) { // 进程结束
-                    // 循环将确认进程确实已消失
+                if (wait_result == WAIT_OBJECT_0) {
                     continue;
                 }
-                else if (wait_result == WAIT_OBJECT_0 + 1) { // 消息
-                    ProcUtils_MsgWait(-1);                   // 处理所有消息
+                else if (wait_result == WAIT_OBJECT_0 + 1) {
+                    ProcUtils_MsgWait(-1);
                 }
                 continue;
             }
         }
-
         ProcUtils_MsgWait(100);
     }
 

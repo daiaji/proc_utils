@@ -6,7 +6,9 @@
 
 ## ✨ 功能特性
 
--   **进程查找**: 按进程名或 PID 检查进程是否存在。
+-   **进程查找**: 
+    - 按进程名或 PID 检查进程是否存在。
+    - **查找所有同名进程**，并返回它们的 PID 列表。
 -   **进程执行**: 启动新进程，支持设置工作目录、窗口显示模式，并可选择同步等待。
 -   **进程终止**: 强制终止指定进程，或终止一个完整的进程树（包括所有子进程）。
 -   **进程等待**:
@@ -17,6 +19,7 @@
     -   获取指定进程的父进程 PID。
 -   **属性修改**: 设置进程的CPU优先级（如：低、正常、高、实时）。
 -   **纯 C 接口**: 导出的函数均为 `extern "C"`，确保了跨语言调用的兼容性。
+-   **健壮的错误处理**: 所有 API 在失败时都会设置标准的 Win32 错误码，可通过 `GetLastError()` 获取。
 
 ## 🛠️ 如何编译
 
@@ -218,11 +221,13 @@ if __name__ == "__main__":
 
 ## 📜 API 参考
 
+**重要**: 当函数返回 `false`, `0`, 或 `NULL` 表示失败时，可以立即调用 Windows API `GetLastError()` 来获取详细的错误代码。
+
 以下是所有导出的函数列表：
 
 | 函数名 | 描述 |
 | :--- | :--- |
-| `ProcUtils_ProcessExists(name_or_pid)` | 按进程名或 PID 查找进程。存在则返回 PID，否则返回 0。 |
+| `ProcUtils_ProcessExists(name_or_pid)` | 按进程名或 PID 查找进程。存在则返回第一个匹配的 PID，否则返回 0。 |
 | `ProcUtils_ProcessClose(name_or_pid, exit_code)` | 强制终止一个进程。成功返回 `true`。 |
 | `ProcUtils_ProcessWait(name, timeout_ms)` | 等待指定进程出现。出现则返回其 PID，超时返回 0。 |
 | `ProcUtils_ProcessWaitClose(name_or_pid, timeout_ms)` | 等待指定进程结束。正常结束返回 `true`。 |
@@ -231,6 +236,7 @@ if __name__ == "__main__":
 | `ProcUtils_ProcessGetParent(name_or_pid)` | 获取指定进程的父进程 ID。成功返回父进程 PID，失败返回 0。 |
 | `ProcUtils_ProcessSetPriority(name_or_pid, priority)` | 设置进程优先级 ('L', 'B', 'N', 'A', 'H', 'R')。成功返回 `true`。 |
 | `ProcUtils_ProcessCloseTree(name_or_pid)` | 终止一个进程及其所有子进程。成功返回 `true`。 |
+| `ProcUtils_FindAllProcesses(name, out_pids, size)` | **【新】** 查找所有同名进程。返回找到的数量，出错返回 -1。|
 
 ## 📄 许可证
 

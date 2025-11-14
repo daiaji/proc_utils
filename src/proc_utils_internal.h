@@ -8,6 +8,7 @@
 #include <atomic>
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <vector> // 为 ProcUtils_Exec 的 RAII 实现引入
 
 // RAII 包装器，用于自动管理 HANDLE
 class ScopedHandle {
@@ -64,6 +65,8 @@ void ProcUtils_MsgWait(int duration_ms);
 // 内部实现函数的命名空间
 namespace ProcUtils::Internal {
 DWORD FindProcess(const wchar_t* process_name_or_pid);
+
+int FindAllProcesses(const wchar_t* process_name, unsigned int* out_pids, int pids_array_size); // <-- 新增
 
 DWORD GetProcessPath(DWORD process_id, wchar_t* buffer, DWORD buffer_size);
 
