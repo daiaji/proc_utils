@@ -9,11 +9,14 @@
 
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <userenv.h>  // For CreateEnvironmentBlock
+#include <winternl.h> // For PEB, RTL_USER_PROCESS_PARAMETERS
+#include <wtsapi32.h>
 
 // --- C++ Standard Library Headers ---
 #include <atomic>
 #include <functional>
-#include <string> // For std::to_wstring in C++ wrapper
+#include <string>
 #include <vector>
 
 // --- C Standard Library Headers ---
@@ -25,7 +28,11 @@
 // --- Project Public Header ---
 #include "proc_utils.h"
 
-// --- RAII Wrapper ---
+// --- Link Libraries ---
+#pragma comment(lib, "wtsapi32.lib")
+#pragma comment(lib, "userenv.lib")
+
+// --- RAII Wrappers ---
 class ScopedHandle {
  public:
     explicit ScopedHandle(HANDLE h = INVALID_HANDLE_VALUE) : handle_(h)
@@ -33,7 +40,7 @@ class ScopedHandle {
     }
     ~ScopedHandle()
     {
-        if (handle_ != INVALID_HANDLE_VALUE && handle_ != NULL) {
+        if (IsValid()) {
             ::CloseHandle(handle_);
         }
     }
@@ -48,7 +55,7 @@ class ScopedHandle {
     ScopedHandle& operator=(ScopedHandle&& other) noexcept
     {
         if (this != &other) {
-            if (handle_ != INVALID_HANDLE_VALUE && handle_ != NULL)
+            if (IsValid())
                 ::CloseHandle(handle_);
             handle_ = other.handle_;
             other.handle_ = INVALID_HANDLE_VALUE;
@@ -69,17 +76,41 @@ class ScopedHandle {
     HANDLE handle_;
 };
 
+class ScopedEnvironmentBlock {
+ public:
+    explicit ScopedEnvironmentBlock(void* block = nullptr) : block_(block)
+    {
+    }
+    ~ScopedEnvironmentBlock()
+    {
+        if (block_) {
+            DestroyEnvironmentBlock(block_);
+        }
+    }
+    operator void*() const
+    {
+        return block_;
+    }
+
+ private:
+    void* block_;
+};
+
 // --- Global Variables & Forward Declarations ---
 extern std::atomic<bool> g_procutils_should_exit;
 
 void ProcUtils_MsgWait(int duration_ms);
 
+// --- Internal Function Prototypes ---
 namespace ProcUtils::Internal {
 bool ForEachProcess(const std::function<bool(const PROCESSENTRY32W&)>& callback);
 DWORD FindProcess(const wchar_t* process_name_or_pid);
-int FindAllProcesses(const wchar_t* process_name, unsigned int* out_pids, int pids_array_size);
+// --- 修正点 ---
+int FindAllProcesses(const wchar_t* process_name, DWORD* out_pids, int pids_array_size);
 DWORD GetProcessPath(DWORD process_id, wchar_t* buffer, DWORD buffer_size, HANDLE existing_process_handle = NULL);
 DWORD GetParentProcessId(DWORD child_pid);
 bool WaitForProcess(const wchar_t* process_name_or_pid, int timeout_ms, bool wait_for_close, DWORD* out_pid);
 bool GetProcessInfo(DWORD pid, ProcUtils_ProcessInfo* out_info);
+bool GetProcessCommandLine(DWORD pid, wchar_t* buffer, int buffer_size);
+void TerminateProcessTree(DWORD process_id);
 } // namespace ProcUtils::Internal

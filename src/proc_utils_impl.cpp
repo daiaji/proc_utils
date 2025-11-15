@@ -15,7 +15,7 @@ bool ForEachProcess(const std::function<bool(const PROCESSENTRY32W&)>& callback)
     if (Process32FirstW(h_snap, &pe)) {
         do {
             if (callback(pe)) {
-                break;
+                break; // Callback requested to stop iteration
             }
         } while (Process32NextW(h_snap, &pe));
     }
@@ -24,12 +24,14 @@ bool ForEachProcess(const std::function<bool(const PROCESSENTRY32W&)>& callback)
 
 DWORD GetProcessPath(DWORD process_id, wchar_t* buffer, DWORD buffer_size, HANDLE existing_process_handle)
 {
+    if (!buffer || buffer_size == 0)
+        return 0;
     *buffer = L'\0';
     ScopedHandle h_proc;
     HANDLE process_handle = existing_process_handle;
 
     if (!process_handle) {
-        h_proc = ScopedHandle(OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process_id));
+        h_proc = ScopedHandle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
         if (!h_proc.IsValid())
             return 0;
         process_handle = h_proc;
@@ -40,29 +42,13 @@ DWORD GetProcessPath(DWORD process_id, wchar_t* buffer, DWORD buffer_size, HANDL
         return path_length;
     }
 
-    path_length = GetProcessImageFileNameW(process_handle, buffer, buffer_size);
-    if (path_length) {
-        wchar_t device_path[MAX_PATH];
-        wchar_t drive_letter[3] = L"A:";
-        DWORD drive_mask = GetLogicalDrives();
-        for (int i = 0; i < 26; ++i) {
-            if (!(drive_mask & (1 << i)))
-                continue;
-            drive_letter[0] = L'A' + i;
-            if (QueryDosDeviceW(drive_letter, device_path, _countof(device_path)) > 2) {
-                size_t device_path_len = wcslen(device_path);
-                if (wcsncmp(device_path, buffer, device_path_len) == 0 && buffer[device_path_len] == L'\\') {
-                    wchar_t temp_path[MAX_PATH];
-                    wcscpy_s(temp_path, _countof(temp_path), buffer + device_path_len);
-                    wcscpy_s(buffer, buffer_size, drive_letter);
-                    wcscat_s(buffer, buffer_size, temp_path);
-                    path_length = (DWORD)wcslen(buffer);
-                    break;
-                }
-            }
-        }
+    // Fallback for older systems or restricted processes
+    path_length = GetModuleFileNameExW(process_handle, NULL, buffer, buffer_size);
+    if (path_length > 0) {
+        return path_length;
     }
-    return path_length;
+
+    return 0;
 }
 
 DWORD FindProcess(const wchar_t* process_name_or_pid)
@@ -80,34 +66,41 @@ DWORD FindProcess(const wchar_t* process_name_or_pid)
         if (is_pid_search) {
             if (pe.th32ProcessID == target_pid) {
                 found_pid = pe.th32ProcessID;
-                return true;
+                return true; // Stop iteration
             }
         }
         else {
             if (_wcsicmp(pe.szExeFile, process_name_or_pid) == 0) {
                 found_pid = pe.th32ProcessID;
-                return true;
+                return true; // Stop iteration
             }
         }
-        return false;
+        return false; // Continue iteration
     });
     return found_pid;
 }
 
-int FindAllProcesses(const wchar_t* process_name, unsigned int* out_pids, int pids_array_size)
+// --- 修正点 ---
+int FindAllProcesses(const wchar_t* process_name, DWORD* out_pids, int pids_array_size)
 {
     int found_count = 0;
+    int stored_count = 0;
     bool success = ForEachProcess([&](const PROCESSENTRY32W& pe) {
         if (_wcsicmp(pe.szExeFile, process_name) == 0) {
-            if (found_count < pids_array_size) {
-                out_pids[found_count] = pe.th32ProcessID;
+            if (out_pids && stored_count < pids_array_size) {
+                out_pids[stored_count++] = pe.th32ProcessID;
             }
             found_count++;
         }
-        return false;
+        return false; // Continue iteration
     });
 
-    return success ? found_count : -1;
+    if (!success)
+        return -1;
+
+    // If buffer was provided, return number of items stored.
+    // If no buffer, return total number found.
+    return out_pids ? stored_count : found_count;
 }
 
 DWORD GetParentProcessId(DWORD child_pid)
@@ -116,9 +109,9 @@ DWORD GetParentProcessId(DWORD child_pid)
     ForEachProcess([&](const PROCESSENTRY32W& pe) {
         if (pe.th32ProcessID == child_pid) {
             parent_pid = pe.th32ParentProcessID;
-            return true;
+            return true; // Stop iteration
         }
-        return false;
+        return false; // Continue iteration
     });
     return parent_pid;
 }
@@ -128,7 +121,7 @@ bool WaitForProcess(const wchar_t* process_name_or_pid, int timeout_ms, bool wai
     const bool wait_indefinitely = timeout_ms < 0;
     const ULONGLONG start_time = GetTickCount64();
 
-    DWORD initial_pid = FindProcess(process_name_or_pid);
+    DWORD initial_pid = wait_for_close ? FindProcess(process_name_or_pid) : 0;
 
     while (!g_procutils_should_exit.load(std::memory_order_relaxed)) {
         DWORD current_pid = FindProcess(process_name_or_pid);
@@ -137,7 +130,7 @@ bool WaitForProcess(const wchar_t* process_name_or_pid, int timeout_ms, bool wai
 
         if (condition_met) {
             if (out_pid)
-                *out_pid = current_pid;
+                *out_pid = wait_for_close ? initial_pid : current_pid;
             return true;
         }
 
@@ -150,11 +143,17 @@ bool WaitForProcess(const wchar_t* process_name_or_pid, int timeout_ms, bool wai
             ScopedHandle proc_handle(OpenProcess(SYNCHRONIZE, FALSE, initial_pid));
             if (proc_handle.IsValid()) {
                 HANDLE raw_proc_handle = proc_handle;
-                DWORD wait_result = MsgWaitForMultipleObjects(1, &raw_proc_handle, FALSE, 100, QS_ALLINPUT);
-                if (wait_result == WAIT_OBJECT_0) {
+                DWORD remaining_time =
+                    wait_indefinitely ? 100 : (DWORD)timeout_ms - (DWORD)(GetTickCount64() - start_time);
+                if ((int)remaining_time <= 0)
+                    remaining_time = 1;
+
+                DWORD wait_result = MsgWaitForMultipleObjects(1, &raw_proc_handle, FALSE, remaining_time, QS_ALLINPUT);
+
+                if (wait_result == WAIT_OBJECT_0) { // Process terminated
                     continue;
                 }
-                else if (wait_result == WAIT_OBJECT_0 + 1) {
+                if (wait_result == WAIT_OBJECT_0 + 1) { // Windows message
                     ProcUtils_MsgWait(-1);
                 }
                 continue;

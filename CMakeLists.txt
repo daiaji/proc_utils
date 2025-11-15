@@ -4,19 +4,19 @@ cmake_minimum_required(VERSION 3.10)
 # 定义项目名称和所用语言 (C++)
 project(proc_utils CXX)
 
-# --- 核心修正：灵活构建动态/静态库 ---
+# --- 核心：灵活构建动态/静态库 ---
 # 默认构建动态库，除非外部设置了 BUILD_SHARED_LIBS=OFF
 option(BUILD_SHARED_LIBS "Build shared libraries (.dll)" ON)
 
-# --- 修正：确保所有源文件都被编译 ---
+# --- 添加所有源文件 ---
 add_library(proc_utils
     src/proc_utils_core.cpp
     src/proc_utils_impl.cpp
-    src/proc_utils_info.cpp   # <-- 将这个源文件添加到编译列表中
+    src/proc_utils_info.cpp
 )
 
-# 当构建动态库时，需要定义 PROC_UTILS_EXPORTS 宏
-# 当构建静态库时，需要定义 PROC_UTILS_STATIC_LIB 宏
+# 当构建动态库时，定义 PROC_UTILS_EXPORTS 宏
+# 当构建静态库时，定义 PROC_UTILS_STATIC_LIB 宏
 if(BUILD_SHARED_LIBS)
     target_compile_definitions(proc_utils PUBLIC
         $<$<BOOL:${BUILD_SHARED_LIBS}>:PROC_UTILS_EXPORTS>
@@ -41,7 +41,10 @@ target_include_directories(proc_utils PRIVATE
     src # 内部头文件
 )
 
-# --- 修正：为所有目标设置正确的 MSVC 运行时库 ---
+# --- 链接 Windows 库 ---
+target_link_libraries(proc_utils PRIVATE psapi.lib)
+
+# --- 为所有目标设置正确的 MSVC 运行时库 ---
 if(MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
