@@ -101,12 +101,13 @@ PROC_UTILS_API bool ProcUtils_ProcessGetPath(unsigned int pid, wchar_t* out_path
     return ProcUtils::Internal::GetProcessPath(pid, out_path, path_size) > 0;
 }
 
-PROC_UTILS_API unsigned int ProcUtils_Exec(const wchar_t* command, const wchar_t* working_dir, int show_mode, bool wait,
-                                           const wchar_t* desktop_name)
+PROC_UTILS_API ProcUtils_ProcessResult ProcUtils_CreateProcess(const wchar_t* command, const wchar_t* working_dir,
+                                                               int show_mode, const wchar_t* desktop_name)
 {
+    ProcUtils_ProcessResult result = {0, NULL};
     if (!command || !*command) {
         SetLastError(ERROR_INVALID_PARAMETER);
-        return 0;
+        return result;
     }
     STARTUPINFOW si = {sizeof(si)};
     PROCESS_INFORMATION pi;
@@ -115,36 +116,35 @@ PROC_UTILS_API unsigned int ProcUtils_Exec(const wchar_t* command, const wchar_t
     if (desktop_name && *desktop_name) {
         si.lpDesktop = const_cast<LPWSTR>(desktop_name);
     }
-    std::vector<wchar_t> cmd_buffer(command, command + wcslen(command) + 1);
-    if (!CreateProcessW(nullptr, cmd_buffer.data(), nullptr, nullptr, FALSE, 0, nullptr, working_dir, &si, &pi))
-        return 0;
 
-    ScopedHandle hProcess(pi.hProcess);
-    ScopedHandle hThread(pi.hThread);
-    if (wait) {
-        while (!g_procutils_should_exit.load(std::memory_order_relaxed)) {
-            HANDLE process_handle = hProcess;
-            DWORD wait_result = MsgWaitForMultipleObjects(1, &process_handle, FALSE, INFINITE, QS_ALLINPUT);
-            if (wait_result == WAIT_OBJECT_0)
-                break;
-            if (wait_result == WAIT_OBJECT_0 + 1) {
-                MSG msg;
-                while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
-                    if (msg.message == WM_QUIT) {
-                        g_procutils_should_exit.store(true, std::memory_order_relaxed);
-                        ::TerminateProcess(hProcess, 1);
-                        break;
-                    }
-                    TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
-            }
-            else {
-                break;
-            }
-        }
+    std::vector<wchar_t> cmd_buffer(command, command + wcslen(command) + 1);
+
+    if (!CreateProcessW(nullptr, cmd_buffer.data(), nullptr, nullptr, FALSE, 0, nullptr, working_dir, &si, &pi)) {
+        return result;
     }
-    return pi.dwProcessId;
+
+    // 关闭不再需要的线程句柄
+    ::CloseHandle(pi.hThread);
+
+    // 不关闭进程句柄，将其所有权转移给调用者
+    result.pid = pi.dwProcessId;
+    result.process_handle = pi.hProcess;
+
+    return result;
+}
+
+PROC_UTILS_API unsigned int ProcUtils_LaunchProcess(const wchar_t* command, const wchar_t* working_dir, int show_mode,
+                                                    const wchar_t* desktop_name)
+{
+    ProcUtils_ProcessResult result = ProcUtils_CreateProcess(command, working_dir, show_mode, desktop_name);
+    if (result.pid == 0) {
+        return 0; // 创建失败
+    }
+
+    // 立即关闭句柄，只返回PID
+    ::CloseHandle(result.process_handle);
+
+    return result.pid;
 }
 
 PROC_UTILS_API unsigned int ProcUtils_ProcessGetParent(const wchar_t* process_name_or_pid)

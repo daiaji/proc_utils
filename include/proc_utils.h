@@ -32,25 +32,49 @@ typedef struct {
     unsigned int thread_count;
 } ProcUtils_ProcessInfo;
 
+/**
+ * @struct ProcUtils_ProcessResult
+ * @brief 创建进程后返回的结果，包含 PID 和一个有效的进程句柄。
+ * @note 调用者获得句柄后，有责任在不再需要时调用 CloseHandle() 来释放它。
+ */
+typedef struct {
+    unsigned int pid;
+    void* process_handle; // 类型为 HANDLE
+} ProcUtils_ProcessResult;
+
 PROC_UTILS_API unsigned int ProcUtils_ProcessExists(const wchar_t* process_name_or_pid);
 PROC_UTILS_API bool ProcUtils_ProcessClose(const wchar_t* process_name_or_pid, unsigned int exit_code);
 PROC_UTILS_API unsigned int ProcUtils_ProcessWait(const wchar_t* process_name, int timeout_ms);
 PROC_UTILS_API bool ProcUtils_ProcessWaitClose(const wchar_t* process_name_or_pid, int timeout_ms);
 PROC_UTILS_API bool ProcUtils_ProcessGetPath(unsigned int pid, wchar_t* out_path, int path_size);
-PROC_UTILS_API unsigned int ProcUtils_Exec(const wchar_t* command, const wchar_t* working_dir, int show_mode, bool wait,
-                                           const wchar_t* desktop_name);
 PROC_UTILS_API unsigned int ProcUtils_ProcessGetParent(const wchar_t* process_name_or_pid);
 PROC_UTILS_API bool ProcUtils_ProcessSetPriority(const wchar_t* process_name_or_pid, wchar_t priority);
 PROC_UTILS_API bool ProcUtils_ProcessCloseTree(const wchar_t* process_name_or_pid);
 PROC_UTILS_API int ProcUtils_FindAllProcesses(const wchar_t* process_name, unsigned int* out_pids, int pids_array_size);
+PROC_UTILS_API bool ProcUtils_ProcessGetInfo(unsigned int pid, ProcUtils_ProcessInfo* out_info);
 
 /**
- * @brief 【新增】获取指定进程的详细信息。
- * @param pid 进程ID。
- * @param out_info 指向 ProcUtils_ProcessInfo 结构体的指针，用于接收信息。
- * @return 成功返回 true，失败返回 false。
+ * @brief 【新增】创建一个新进程，并原子性地返回其 PID 和进程句柄。
+ * @param command 命令行。
+ * @param working_dir 工作目录，可为 NULL。
+ * @param show_mode 窗口显示模式 (例如 SW_HIDE, SW_SHOW)。
+ * @param desktop_name 桌面名称，可为 NULL。
+ * @return 成功则返回包含有效 PID 和句柄的 ProcUtils_ProcessResult 结构体。失败则返回 {0, NULL}。
+ * @warning 调用者必须负责对返回的 process_handle 调用 CloseHandle()。
  */
-PROC_UTILS_API bool ProcUtils_ProcessGetInfo(unsigned int pid, ProcUtils_ProcessInfo* out_info);
+PROC_UTILS_API ProcUtils_ProcessResult ProcUtils_CreateProcess(const wchar_t* command, const wchar_t* working_dir,
+                                                               int show_mode, const wchar_t* desktop_name);
+
+/**
+ * @brief 【新增】以“发后不理”的方式启动一个新进程，只返回 PID。
+ * @param command 命令行。
+ * @param working_dir 工作目录，可为 NULL。
+ * @param show_mode 窗口显示模式 (例如 SW_HIDE, SW_SHOW)。
+ * @param desktop_name 桌面名称，可为 NULL。
+ * @return 成功则返回新进程的 PID，失败返回 0。
+ */
+PROC_UTILS_API unsigned int ProcUtils_LaunchProcess(const wchar_t* command, const wchar_t* working_dir, int show_mode,
+                                                    const wchar_t* desktop_name);
 
 #ifdef __cplusplus
 } // extern "C"
@@ -61,13 +85,59 @@ PROC_UTILS_API bool ProcUtils_ProcessGetInfo(unsigned int pid, ProcUtils_Process
 #if defined(__cplusplus) && !defined(PROC_UTILS_NO_CPP_WRAPPER)
 #include <optional>
 #include <string>
+#include <utility> // For std::move
 #include <vector>
+
+// 在 C++ 封装中需要 Windows.h 的定义
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace ProcUtils {
 class Process {
  public:
-    Process(unsigned int pid = 0) : pid_(pid)
+    // 默认构造
+    Process() : pid_(0), handle_(NULL)
     {
+    }
+
+    // 通过 PID 构造 (不获取句柄)
+    explicit Process(unsigned int pid) : pid_(pid), handle_(NULL)
+    {
+    }
+
+    // 析构函数，实现 RAII
+    ~Process()
+    {
+        if (handle_ != NULL && handle_ != INVALID_HANDLE_VALUE) {
+            ::CloseHandle(handle_);
+        }
+    }
+
+    // 删除拷贝构造和拷贝赋值
+    Process(const Process&) = delete;
+    Process& operator=(const Process&) = delete;
+
+    // 实现移动构造函数
+    Process(Process&& other) noexcept : pid_(other.pid_), handle_(other.handle_)
+    {
+        other.pid_ = 0;
+        other.handle_ = NULL;
+    }
+
+    // 实现移动赋值运算符
+    Process& operator=(Process&& other) noexcept
+    {
+        if (this != &other) {
+            if (handle_ != NULL && handle_ != INVALID_HANDLE_VALUE) {
+                ::CloseHandle(handle_);
+            }
+            pid_ = other.pid_;
+            handle_ = other.handle_;
+            other.pid_ = 0;
+            other.handle_ = NULL;
+        }
+        return *this;
     }
 
     static Process find(const std::wstring& name_or_pid)
@@ -81,7 +151,6 @@ class Process {
         unsigned int pids[128];
         int count = ProcUtils_FindAllProcesses(name.c_str(), pids, _countof(pids));
         if (count > _countof(pids)) {
-            // Buffer was too small, resize and try again
             std::vector<unsigned int> large_pids(count);
             ProcUtils_FindAllProcesses(name.c_str(), large_pids.data(), count);
             for (int i = 0; i < count; ++i) {
@@ -96,10 +165,23 @@ class Process {
         return processes;
     }
 
+    /**
+     * @brief 创建一个新进程，并返回一个管理其句柄的 Process 对象。
+     */
     static Process exec(const std::wstring& command, const wchar_t* working_dir = nullptr, int show_mode = 1,
-                        bool wait = false, const wchar_t* desktop_name = nullptr)
+                        const wchar_t* desktop_name = nullptr)
     {
-        return Process(ProcUtils_Exec(command.c_str(), working_dir, show_mode, wait, desktop_name));
+        ProcUtils_ProcessResult result = ProcUtils_CreateProcess(command.c_str(), working_dir, show_mode, desktop_name);
+        return Process(result.pid, static_cast<HANDLE>(result.process_handle));
+    }
+
+    /**
+     * @brief 以“发后不理”的方式启动一个新进程，只返回 PID。
+     */
+    static unsigned int launch(const std::wstring& command, const wchar_t* working_dir = nullptr, int show_mode = 1,
+                               const wchar_t* desktop_name = nullptr)
+    {
+        return ProcUtils_LaunchProcess(command.c_str(), working_dir, show_mode, desktop_name);
     }
 
     bool is_valid() const
@@ -109,6 +191,10 @@ class Process {
     unsigned int id() const
     {
         return pid_;
+    }
+    HANDLE handle() const
+    {
+        return handle_;
     }
 
     bool close(unsigned int exit_code = 0)
@@ -141,7 +227,13 @@ class Process {
     }
 
  private:
+    // 私有构造函数，用于 exec
+    Process(unsigned int pid, HANDLE handle) : pid_(pid), handle_(handle)
+    {
+    }
+
     unsigned int pid_;
+    HANDLE handle_; // C++ 封装现在持有句柄
 };
 } // namespace ProcUtils
 #endif // defined(__cplusplus)

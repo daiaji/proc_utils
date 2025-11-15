@@ -9,7 +9,9 @@
 -   **进程查找**: 
     - 按进程名或 PID 检查进程是否存在。
     - 查找所有同名进程，并返回它们的 PID 列表。
--   **进程执行**: 启动新进程，支持设置工作目录、窗口显示模式，并可选择同步等待。
+-   **进程执行**: 
+    - **【新】`CreateProcess`**: 创建新进程，并原子性返回 PID 和进程句柄，用于高级操作。
+    - **【新】`LaunchProcess`**: 以“发后不理”的方式启动新进程，只返回 PID，简单便捷。
 -   **进程终止**: 强制终止指定进程，或终止一个完整的进程树（包括所有子进程）。
 -   **进程等待**:
     -   同步等待，直到指定名称的进程出现。
@@ -17,10 +19,10 @@
 -   **信息获取**:
     -   获取进程可执行文件的完整路径。
     -   获取指定进程的父进程 PID。
-    -   **【新】获取进程的详细信息** (PID, 父 PID, 路径, 内存使用, 线程数)。
+    -   获取进程的详细信息 (PID, 父 PID, 路径, 内存使用, 线程数)。
 -   **属性修改**: 设置进程的CPU优先级（如：低、正常、高、实时）。
 -   **纯 C 接口**: 导出的函数均为 `extern "C"`，确保了跨语言调用的兼容性。
--   **可选的 C++ 封装**: 提供一个头文件级别的 C++ Wrapper，带来更现代化的编程体验。
+-   **可选的 C++ 封装**: 提供一个头文件级别的 C++ Wrapper，带来更现代化的编程体验，并自动管理资源。
 -   **健壮的错误处理**: 所有 API 在失败时都会设置标准的 Win32 错误码，可通过 `GetLastError()` 获取。
 
 ## 🛠️ 如何编译
@@ -81,24 +83,29 @@
 
 int main() {
     const wchar_t* process_name = L"notepad.exe";
-    unsigned int pid = ProcUtils_Exec(process_name, NULL, SW_SHOW, 0, NULL);
-
+    
+    // 场景1: 简单启动，不需要后续操作
+    unsigned int pid = ProcUtils_LaunchProcess(process_name, NULL, SW_SHOW, NULL);
     if (pid > 0) {
         printf("成功启动 notepad.exe, PID: %u\n", pid);
-
-        ProcUtils_ProcessInfo info;
-        if (ProcUtils_ProcessGetInfo(pid, &info)) {
-            wprintf(L"进程信息获取成功:\n");
-            wprintf(L"  路径: %s\n", info.exe_path);
-            wprintf(L"  父进程ID: %u\n", info.parent_pid);
-            wprintf(L"  线程数: %u\n", info.thread_count);
-            wprintf(L"  内存使用: %llu KB\n", info.memory_usage_bytes / 1024);
-        }
-        
-        Sleep(3000);
+        Sleep(1000);
         ProcUtils_ProcessClose(process_name, 0);
         printf("已关闭 notepad.exe\n");
     }
+
+    // 场景2: 启动进程并需要后续高级操作
+    ProcUtils_ProcessResult result = ProcUtils_CreateProcess(process_name, NULL, SW_SHOW, NULL);
+    if (result.pid > 0) {
+        printf("CreateProcess 成功, PID: %u, Handle: %p\n", result.pid, result.process_handle);
+
+        // 使用句柄等待进程结束
+        WaitForSingleObject(result.process_handle, 3000);
+
+        // **重要**: 必须手动关闭句柄！
+        CloseHandle(result.process_handle);
+        printf("已关闭句柄并等待结束。\n");
+    }
+    
     return 0;
 }
 ```
@@ -115,10 +122,11 @@ int main() {
 #pragma comment(lib, "proc_utils.lib")
 
 int main() {
-    // 使用 C++ Wrapper
+    // 使用 C++ Wrapper，它会自动管理句柄的生命周期 (RAII)
     auto notepad = ProcUtils::Process::exec(L"notepad.exe", nullptr, SW_SHOW);
     if (notepad.is_valid()) {
-        std::wcout << L"成功启动 notepad.exe, PID: " << notepad.id() << std::endl;
+        std::wcout << L"成功启动 notepad.exe, PID: " << notepad.id() 
+                   << L", Handle: " << notepad.handle() << std::endl;
         
         auto info = notepad.get_info();
         if (info) { // info 是一个 std::optional
@@ -128,9 +136,11 @@ int main() {
         }
 
         Sleep(3000);
-        notepad.close();
-        std::wcout << L"已关闭 notepad.exe" << std::endl;
-    }
+        // notepad.close(); // 可以主动关闭
+    } // notepad 对象离开作用域时，其析构函数会自动调用 CloseHandle，无需手动管理
+    
+    std::wcout << L"notepad.exe 已关闭或其句柄已被自动释放。" << std::endl;
+    
     return 0;
 }
 ```
@@ -146,12 +156,13 @@ int main() {
 | `ProcUtils_ProcessWait(name, timeout_ms)` | 等待指定进程出现。出现则返回其 PID，超时返回 0。 |
 | `ProcUtils_ProcessWaitClose(name_or_pid, timeout_ms)` | 等待指定进程结束。正常结束返回 `true`。 |
 | `ProcUtils_ProcessGetPath(pid, out_path, path_size)` | 获取指定 PID 进程的完整路径。成功返回 `true`。 |
-| `ProcUtils_Exec(cmd, work_dir, show, wait, desktop)` | 执行一个外部程序。成功启动则返回其 PID，失败返回 0。 |
+| `ProcUtils_CreateProcess(cmd, ...)` | **【新】** 创建一个新进程，并返回其 PID 和句柄。调用者需手动关闭句柄。 |
+| `ProcUtils_LaunchProcess(cmd, ...)` | **【新】** 以“发后不理”模式启动进程，只返回 PID，无需管理句柄。|
 | `ProcUtils_ProcessGetParent(name_or_pid)` | 获取指定进程的父进程 ID。成功返回父进程 PID，失败返回 0。 |
 | `ProcUtils_ProcessSetPriority(name_or_pid, priority)` | 设置进程优先级 ('L', 'B', 'N', 'A', 'H', 'R')。成功返回 `true`。 |
 | `ProcUtils_ProcessCloseTree(name_or_pid)` | 终止一个进程及其所有子进程。成功返回 `true`。 |
 | `ProcUtils_FindAllProcesses(name, out_pids, size)` | 查找所有同名进程。返回找到的数量，出错返回 -1。|
-| `ProcUtils_ProcessGetInfo(pid, out_info)` | **【新】** 获取指定进程的详细信息。成功返回 `true`。|
+| `ProcUtils_ProcessGetInfo(pid, out_info)` | 获取指定进程的详细信息。成功返回 `true`。|
 
 ## 📄 许可证
 
