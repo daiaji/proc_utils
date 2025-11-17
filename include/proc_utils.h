@@ -258,6 +258,8 @@ class Process {
         if (!is_valid())
             return L"";
         wchar_t buffer[MAX_PATH];
+        // --- 修正点 ---
+        // 将 ProcUtils_GetProcessPath 改为 ProcUtils_ProcessGetPath
         if (ProcUtils_ProcessGetPath(pid_, buffer, _countof(buffer))) {
             return buffer;
         }

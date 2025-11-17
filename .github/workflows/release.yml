@@ -15,7 +15,6 @@ on:
         description: '要创建的标签和版本号 (例如: v1.0.1)'
         required: true
         type: string
-      # ... (其他手动触发输入保持不变) ...
       release_name:
         description: '发布的标题 (可选, 默认为 "Release [tag_name]")'
         required: false

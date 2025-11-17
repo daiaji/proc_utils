@@ -1,5 +1,5 @@
 # GitHub Actions 工作流名称
-name: C++ CI (Build, Format, Analyze & Test) # <-- 名称更新
+name: C++ CI (Build, Format, Analyze & Test)
 
 # 工作流触发条件
 on:
@@ -10,7 +10,7 @@ on:
 
 # 定义一系列任务（jobs）
 jobs:
-  build-analyze-and-test: # <-- Job 名称更新
+  build-analyze-and-test:
     # 指定运行此任务的操作系统环境
     runs-on: windows-latest
 
@@ -30,17 +30,42 @@ jobs:
       - name: Setup MSVC
         uses: microsoft/setup-msbuild@v1.1
 
-      # 步骤4: 配置 CMake
+      # 步骤4: 配置 CMake (默认构建动态库)
       - name: Configure CMake
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_SHARED_LIBS=ON
 
       # 步骤5: 编译项目并执行静态分析
       - name: Build Project & Run Static Analysis
         run: cmake --build build --config Release -- /p:RunCodeAnalysis=true /p:CodeAnalysisTreatWarningsAsErrors=true
         
-      # --- 新增步骤：运行测试 ---
+      # 步骤6: 运行测试
       - name: Run Python Test Suite
-        # Runner 默认已安装 Python
-        # 我们将编译输出目录 ('build/Release')作为参数传递给测试脚本
         run: python tests/run_tests.py build/Release
         shell: bash
+
+      # --- 新增步骤：准备用于上传的构件 ---
+      - name: Prepare Artifact
+        # 仅在前面的所有步骤都成功时运行
+        if: success()
+        run: |
+          # 创建一个清晰的目录结构
+          mkdir artifact
+          mkdir artifact/bin
+          mkdir artifact/lib
+          mkdir artifact/include
+          # 将构建产物复制到这个结构中
+          copy build/Release/proc_utils.dll artifact/bin/
+          copy build/Release/proc_utils.lib artifact/lib/
+          copy include/proc_utils.h artifact/include/
+        shell: pwsh
+
+      # --- 新增步骤：上传构件 ---
+      - name: Upload Build Artifact
+        # 仅在前面的所有步骤都成功时运行
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          # 构件的名称，将显示在 Actions 页面
+          name: proc-utils-windows-x64-release
+          # 要上传的目录
+          path: artifact/

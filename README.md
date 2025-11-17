@@ -37,11 +37,11 @@
 
 ### 在 C/C++ 中使用
 
-您需要 `proc_utils.dll` (或 `.lib`) 和 `proc_utils.h` 这两个文件。
+从 [Releases 页面](https://github.com/your-username/your-repo/releases)下载最新的 `proc-utils-shared-vX.Y.Z.zip` 包。您需要 `proc_utils.dll`、`proc_utils.lib` 和 `proc_utils.h` 这三个文件。
 
 1.  将 `proc_utils.h` 包含到您的源代码中。
-2.  链接 `proc_utils.lib`。
-3.  确保 `proc_utils.dll` 在运行时可被找到。
+2.  在您的项目中链接 `proc_utils.lib` (这是导入库)。
+3.  确保 `proc_utils.dll` 在运行时可以被您的程序找到 (例如，将它放在与您的 `.exe` 文件相同的目录下，或者放在系统 `PATH` 路径下的目录中)。
 
 **C 语言示例**:
 
@@ -75,7 +75,7 @@ int main() {
 
 ### 在 C++ 中使用 (推荐)
 
-`proc_utils.h` 包含了一个现代、安全的 C++ 封装。
+`proc_utils.h` 包含了一个现代、安全的 C++ 封装。使用步骤与C语言类似，同样需要链接 `proc_utils.lib` 并确保 `proc_utils.dll` 可用。
 
 ```cpp
 #include "proc_utils.h"
