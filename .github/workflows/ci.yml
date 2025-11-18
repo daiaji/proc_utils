@@ -1,71 +1,112 @@
-# GitHub Actions 工作流名称
-name: C++ CI (Build, Format, Analyze & Test)
+name: Proc-Utils CI
 
-# 工作流触发条件
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "FFI"]
   pull_request:
-    branches: ["main", "master"]
+    branches: ["main", "master", "FFI"]
+  workflow_dispatch:
 
-# 定义一系列任务（jobs）
 jobs:
-  build-analyze-and-test:
-    # 指定运行此任务的操作系统环境
+  test-windows:
+    name: Test on Windows (LuaJIT)
     runs-on: windows-latest
+    
+    timeout-minutes: 5
+    
+    env:
+      LUAJIT_INSTALL_DIR: ${{ github.workspace }}\.luajit_bin
+      LUAJIT_SUBMODULE_PATH: vendor/luajit2
 
-    # 任务执行的步骤
     steps:
-      # 步骤1: 检出代码
-      - name: Checkout repository
+      - name: Checkout repository with submodules
         uses: actions/checkout@v4
-
-      # 步骤2: 检查代码格式
-      - name: Check Code Formatting
-        run: |
-          clang-format -style=file --dry-run -Werror $(git ls-files 'src/*.cpp' 'src/*.h' 'include/*.h')
-        shell: bash
-
-      # 步骤3: 设置 MSVC 开发环境
-      - name: Setup MSVC
-        uses: microsoft/setup-msbuild@v1.1
-
-      # 步骤4: 配置 CMake (默认构建动态库)
-      - name: Configure CMake
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_SHARED_LIBS=ON
-
-      # 步骤5: 编译项目并执行静态分析
-      - name: Build Project & Run Static Analysis
-        run: cmake --build build --config Release -- /p:RunCodeAnalysis=true /p:CodeAnalysisTreatWarningsAsErrors=true
-        
-      # 步骤6: 运行测试
-      - name: Run Python Test Suite
-        run: python tests/run_tests.py build/Release
-        shell: bash
-
-      # --- 新增步骤：准备用于上传的构件 ---
-      - name: Prepare Artifact
-        # 仅在前面的所有步骤都成功时运行
-        if: success()
-        run: |
-          # 创建一个清晰的目录结构
-          mkdir artifact
-          mkdir artifact/bin
-          mkdir artifact/lib
-          mkdir artifact/include
-          # 将构建产物复制到这个结构中
-          copy build/Release/proc_utils.dll artifact/bin/
-          copy build/Release/proc_utils.lib artifact/lib/
-          copy include/proc_utils.h artifact/include/
-        shell: pwsh
-
-      # --- 新增步骤：上传构件 ---
-      - name: Upload Build Artifact
-        # 仅在前面的所有步骤都成功时运行
-        if: success()
-        uses: actions/upload-artifact@v4
         with:
-          # 构件的名称，将显示在 Actions 页面
-          name: proc-utils-windows-x64-release
-          # 要上传的目录
-          path: artifact/
+          # [CRITICAL] Recursively checkout submodules to get both vendor/luajit2 and vendor/luaunit
+          submodules: 'recursive'
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Get LuaJIT submodule commit hash
+        id: luajit-hash
+        shell: pwsh
+        run: |
+          $submodule_hash = (git submodule status ${{ env.LUAJIT_SUBMODULE_PATH }}).Trim().Split(' ')[0]
+          echo "hash=$submodule_hash" >> $env:GITHUB_OUTPUT
+
+      - name: Cache MSVC-built LuaJIT
+        id: cache-luajit
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LUAJIT_INSTALL_DIR }}
+          # Increment key version if build logic changes
+          key: luajit-openresty-v2.5-${{ runner.os }}-${{ steps.luajit-hash.outputs.hash }}
+
+      - name: Build and Verify LuaJIT (if not cached)
+        if: steps.cache-luajit.outputs.cache-hit != 'true'
+        working-directory: ${{ env.LUAJIT_SUBMODULE_PATH }}/src
+        shell: pwsh
+        run: |
+          # 1. Build LuaJIT
+          Write-Host "Building LuaJIT..."
+          $env:CL = "/DLUAJIT_ENABLE_LUA52COMPAT"
+          .\msvcbuild.bat
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::LuaJIT build failed!"
+            exit 1
+          }
+
+          # 2. Install Layout
+          $install_dir = "${{ env.LUAJIT_INSTALL_DIR }}"
+          Write-Host "Preparing installation directory: $install_dir"
+          New-Item -ItemType Directory -Path $install_dir -Force
+          
+          $lua_lib_dir = Join-Path $install_dir "lua"
+          New-Item -ItemType Directory -Path $lua_lib_dir -Force
+
+          Write-Host "Copying binaries..."
+          Copy-Item -Path "luajit.exe", "lua51.dll", "lua51.lib" -Destination $install_dir
+          Copy-Item -Path "luajit.exe" -Destination "$install_dir\lua.exe"
+          
+          # 3. Install JIT Libs
+          $jit_source_path = Join-Path $PWD "jit"
+          if (Test-Path $jit_source_path) {
+            Copy-Item -Path $jit_source_path -Destination $lua_lib_dir -Recurse
+          } else {
+            Write-Host "::error::jit directory not found in source after build!"
+            exit 1
+          }
+
+      - name: Add LuaJIT to PATH
+        shell: pwsh
+        run: |
+          echo "${{ env.LUAJIT_INSTALL_DIR }}" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      
+      - name: Debug Environment
+        shell: pwsh
+        run: |
+          Get-Command luajit.exe | Format-List
+          
+          # Verify LuaUnit submodule existence
+          if (Test-Path "vendor/luaunit/luaunit.lua") {
+             Write-Host "LuaUnit found."
+          } else {
+             Write-Host "::error::LuaUnit submodule missing!"
+             exit 1
+          }
+
+      - name: Run Tests with Profiler
+        shell: pwsh
+        run: |
+          # Directly invoke luajit. package.path in spec file handles submodule location.
+          luajit.exe "-jp=fl,profile.log" tests/proc_utils_spec.lua
+
+      - name: Display Profile Log
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path profile.log) {
+            Write-Host "--- Profiler Output (Head 50) ---"
+            Get-Content profile.log -TotalCount 50
+          }

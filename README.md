@@ -1,140 +1,131 @@
-# Proc-Utils: C++ Win32 进程管理工具库
+# Proc-Utils-FFI: LuaJIT FFI Windows 进程管理工具库
 
-`proc_utils` 是一个轻量级的、无外部依赖的工具库，为 Windows 平台提供了一套简洁、健壮的 C 语言接口和现代化的 C++ 封装，用于常见的进程管理任务。
+`proc_utils-ffi` 是一个基于 LuaJIT FFI 的、轻量级的 Windows 平台进程管理工具库。它是 C++ 库 `proc-utils` 的纯 Lua 重构版本，**无需编译**，仅依赖一个 `proc_utils_ffi.lua` 文件即可运行。
 
-该库旨在原子化和简化与进程相关的操作，如查找、创建、终止、等待以及获取详细信息，使其可以被 C/C++、Python、Lua (via FFI) 等多种语言轻松调用。
+该库提供了一套简洁、健壮且符合 Lua 语言习惯的**面向对象接口**，用于常见的进程管理任务，如查找、创建、终止、等待以及获取详细信息。
 
 ## ✨ 功能特性
 
+-   **现代化的 OOP 接口**:
+    -   提供一个 `Process` 对象，通过 **RAII** 模式 (`__gc`元方法) **自动管理进程句柄**，杜绝资源泄漏。
+    -   链式调用和直观的方法，如 `proc.exec("..."):wait_for_exit()`。
+-   **零依赖、免编译**: 纯 `Lua` + `FFI` 实现，只需 `LuaJIT` 环境即可在 Windows 上运行。
+-   **功能完整**: 完整实现了原始 C++ `proc-utils` 库的所有核心功能。
+-   **友好的错误处理**: 失败时返回 `nil`、**错误码**和**人类可读的错误信息字符串**。
+-   **API常量**: 提供 `proc.constants` 表，包含常用的 `SW_*`, `PROCESS_*` 等常量，告别魔法数字。
 -   **进程查找与枚举**:
-    -   按 PID 或进程名打开进程并获取句柄 (`OpenProcessByPid`, `OpenProcessByName`)。
-    -   检查进程是否存在 (`ProcessExists`)。
-    -   查找所有同名进程的 PID 列表 (`FindAllProcesses`)。
+    -   通过工厂方法 `proc.open_by_pid()` 或 `proc.open_by_name()` 获取 `Process` 对象。
+    -   静态方法 `proc.exists()` 和 `proc.find_all()` 用于快速查询。
 -   **进程创建与执行**:
-    -   `CreateProcess`: 创建新进程，并原子性地返回 PID 和进程句柄，用于高级操作。
-    -   `LaunchProcess`: 以“发后不理”的方式启动新进程，只返回 PID，简单便捷。
-    -   `CreateProcessAsSystem`: **【新】** 在当前活动桌面以 `SYSTEM` 权限创建进程。
+    -   `proc.exec()`: 创建新进程并返回一个自动管理句柄的 `Process` 对象。
+    -   `proc.C_API.LaunchProcess`: 提供传统的“发后不理”模式。
+    -   `proc.C_API.CreateProcessAsSystem`: 在当前活动桌面以 `SYSTEM` 权限创建进程。
 -   **进程终止**:
-    -   按 PID 强制终止指定进程 (`TerminateProcessByPid`)。
-    -   终止一个完整的进程树，包括所有子进程 (`TerminateProcessTreeByPid`)。
+    -   `process:terminate()`: 终止进程实例。
+    -   `process:terminate_tree()`: 终止进程实例及其所有子进程。
 -   **进程等待**:
-    -   同步等待，直到指定名称的进程出现 (`ProcessWait`)。
-    -   同步等待，直到指定进程结束 (`ProcessWaitClose`)。
-    -   **【新】** 通过进程句柄高效等待进程结束 (`WaitForProcessExit`)。
+    -   `process:wait_for_exit()`: 通过进程句柄高效等待进程结束。
+    -   `proc.C_API.ProcessWait` 和 `proc.C_API.ProcessWaitClose` 提供基于名称的等待。
 -   **信息获取**:
-    -   **【增强】** 获取进程的详细信息，包括 PID, 父 PID, 会话 ID, 内存使用, 线程数, 可执行文件路径以及**完整的命令行参数** (`ProcessGetInfo`)。
-    -   单独获取进程的父进程 PID 或命令行 (`ProcessGetParent`, `ProcessGetCommandLine`)。
--   **属性修改**: 设置进程的CPU优先级 (`ProcessSetPriority`)。
--   **纯 C 接口**: 所有导出的核心函数均为 `extern "C"`，确保了跨语言调用的兼容性。
--   **现代 C++ 封装**:
-    -   提供一个头文件级别的 C++ `ProcUtils::Process` 类。
-    -   使用 **RAII** 自动管理进程句柄，杜绝资源泄漏。
-    -   使用**移动语义**确保资源所有权的唯一性。
-    -   通过 `std::optional` 和 `std::vector` 提供类型安全、现代化的接口。
--   **健壮的错误处理**: 所有 C 接口在失败时都会设置标准的 Win32 错误码，可通过 `GetLastError()` 获取。
+    -   `process:get_info()`: 以易于使用的 Lua table 形式返回进程的详细信息（路径、**完整命令行**、内存使用等）。
+    -   `process:get_path()` 和 `process:get_command_line()` 提供快捷方法。
+-   **低级API可用**: 为了完全的灵活性和兼容性，所有原始的C风格API都保留在 `proc.C_API` 命名空间下。
 
-## 🚀 如何使用
+## 🚀 如何使用 (推荐的 OOP 风格)
 
-### 在 C/C++ 中使用
+将 `proc_utils_ffi.lua` 文件放入你的项目，并 `require` 它。
 
-从 [Releases 页面](https://github.com/your-username/your-repo/releases)下载最新的 `proc-utils-shared-vX.Y.Z.zip` 包。您需要 `proc_utils.dll`、`proc_utils.lib` 和 `proc_utils.h` 这三个文件。
+```lua
+local proc = require("proc_utils_ffi")
 
-1.  将 `proc_utils.h` 包含到您的源代码中。
-2.  在您的项目中链接 `proc_utils.lib` (这是导入库)。
-3.  确保 `proc_utils.dll` 在运行时可以被您的程序找到 (例如，将它放在与您的 `.exe` 文件相同的目录下，或者放在系统 `PATH` 路径下的目录中)。
-
-**C 语言示例**:
-
-```c
-#include "proc_utils.h"
-#include <stdio.h>
-#include <windows.h>
-
-#pragma comment(lib, "proc_utils.lib")
-
-int main() {
-    const wchar_t* process_name = L"notepad.exe";
-    
-    // 场景: 创建进程并等待其结束
-    ProcUtils_ProcessResult result = ProcUtils_CreateProcess(process_name, NULL, SW_SHOW, NULL);
-    if (result.pid > 0) {
-        printf("CreateProcess 成功, PID: %u, Handle: %p\n", result.pid, result.process_handle);
-
-        printf("等待 3 秒或直到进程关闭...\n");
-        // 使用新的基于句柄的等待函数，更高效
-        ProcUtils_WaitForProcessExit(result.process_handle, 3000);
-        printf("等待结束。\n");
-
-        // **重要**: 必须手动关闭句柄！
-        CloseHandle(result.process_handle);
-    }
-    
-    return 0;
-}
+if not proc._OS_SUPPORT then
+  print("This library only runs on Windows.")
+  return
+end
 ```
 
-### 在 C++ 中使用 (推荐)
+### 示例 1: 创建、交互并自动资源管理
 
-`proc_utils.h` 包含了一个现代、安全的 C++ 封装。使用步骤与C语言类似，同样需要链接 `proc_utils.lib` 并确保 `proc_utils.dll` 可用。
+```lua
+-- 使用常量提高可读性
+local notepad, err_code, err_msg = proc.exec("notepad.exe", nil, proc.constants.SW_SHOW)
 
-```cpp
-#include "proc_utils.h"
-#include <iostream>
+if notepad then
+    print("Notepad 启动成功, PID: " .. notepad.pid)
 
-#pragma comment(lib, "proc_utils.lib")
+    -- 获取详细信息
+    local info, info_err_code, info_err_msg = notepad:get_info()
+    if info then
+        print("  路径: " .. info.exe_path)
+        print("  命令行: " .. info.command_line)
+    else
+        print("获取信息失败: " .. info_err_msg)
+    end
 
-int main() {
-    // 使用 C++ 封装，它通过 RAII 自动管理句柄的生命周期
-    // 使用 std::optional 进行安全的错误处理
-    if (auto notepad = ProcUtils::Process::exec(L"notepad.exe C:\\log.txt")) {
-        std::wcout << L"成功启动 notepad.exe, PID: " << notepad->id() 
-                   << L", Handle: " << notepad->handle() << std::endl;
-        
-        // 获取增强的进程信息
-        if (auto info = notepad->get_info()) {
-            std::wcout << L"  路径: " << info->exe_path << std::endl;
-            std::wcout << L"  命令行: " << info->command_line << std::endl;
-            std::wcout << L"  父进程ID: " << info->parent_pid << std::endl;
-        }
-
-        notepad->wait_for_exit(3000); // 等待最多3秒
-    } // notepad 对象离开作用域时，其析构函数会自动调用 CloseHandle，无需手动管理
-    else {
-        std::wcerr << L"启动 notepad.exe 失败, 错误码: " << GetLastError() << std::endl;
-    }
+    print("等待 3 秒或直到进程关闭...")
+    local exited = notepad:wait_for_exit(3000)
     
-    std::wcout << L"notepad.exe 已关闭或其句柄已被自动释放。" << std::endl;
-    
-    return 0;
-}
+    if not exited then
+        print("进程仍在运行，现在终止它。")
+        notepad:terminate()
+    else
+        print("进程已自行关闭。")
+    end
+else
+    print(string.format("启动 Notepad 失败, 错误: %s (代码: %d)", err_msg, err_code))
+end
+-- 此处 notepad 对象离开作用域，它的 __gc 元方法会自动被调用，
+-- 确保 CloseHandle 被执行，无需手动管理句柄！
 ```
 
-## 📜 API 参考
+### 示例 2: 查找所有 Chrome 进程并打印信息
 
-**重要**: 当函数返回 `false`, `0`, 或 `NULL` 表示失败时，可以立即调用 Windows API `GetLastError()` 来获取详细的错误代码。
+```lua
+local chrome_pids = proc.find_all("chrome.exe")
+if chrome_pids and #chrome_pids > 0 then
+    print("找到 " .. #chrome_pids .. " 个 Chrome 进程:")
+    for _, pid in ipairs(chrome_pids) do
+        local p = proc.open_by_pid(pid)
+        if p then
+            local info = p:get_info()
+            if info then
+                print(string.format("  - PID: %d, Memory: %.2f MB", 
+                    info.pid, (info.memory_usage_bytes or 0) / 1024 / 1024))
+            end
+        end -- p 对象在这里离开作用域并自动关闭句柄
+    end
+else
+    print("没有找到 Chrome 进程。")
+end
+```
 
-| 函数名 | 描述 |
+## 📜 API 参考 (高级 OOP 接口)
+
+| 方法/函数 | 描述 |
 | :--- | :--- |
-| **查找 & 枚举** | |
-| `ProcUtils_OpenProcessByPid(pid, access)` | 按 PID 打开进程并返回 `HANDLE`。 |
-| `ProcUtils_OpenProcessByName(name, access)` | 按名称查找并打开第一个匹配的进程，返回 `HANDLE`。|
-| `ProcUtils_ProcessExists(name_or_pid)` | 检查进程是否存在，存在则返回其 PID，否则返回 0。 |
-| `ProcUtils_FindAllProcesses(name, out_pids, size)`| 查找所有同名进程。返回找到的数量。|
-| **创建 & 执行** | |
-| `ProcUtils_CreateProcess(cmd, ...)` | 创建新进程，返回包含 PID 和 `HANDLE` 的结构体。|
-| `ProcUtils_LaunchProcess(cmd, ...)` | 以“发后不理”模式启动进程，只返回 PID。|
-| `ProcUtils_CreateProcessAsSystem(cmd, ...)` | **【新】** 以 `SYSTEM` 权限在当前桌面创建进程。|
-| **信息获取** | |
-| `ProcUtils_ProcessGetInfo(pid, out_info)` | **【增强】** 获取进程的详细信息（路径、命令行等）。|
-| `ProcUtils_ProcessGetCommandLine(pid, ...)`| **【新】** 单独获取进程的完整命令行。|
-| `ProcUtils_ProcessGetPath(pid, ...)` | 获取指定 PID 进程的完整路径。|
-| `ProcUtils_ProcessGetParent(name_or_pid)`| 获取指定进程的父进程 ID。|
-| **控制 & 交互** | |
-| `ProcUtils_TerminateProcessByPid(pid, code)`| **【新】** 按 PID 终止进程。|
-| `ProcUtils_TerminateProcessTreeByPid(pid)`| **【新】** 按 PID 终止一个进程及其所有子进程。|
-| `ProcUtils_ProcessWait(name, timeout)` | 等待指定名称的进程出现。|
-| `ProcUtils_WaitForProcessExit(handle, timeout)`| **【新】** 通过句柄等待一个进程结束，最高效。|
-| `ProcUtils_ProcessSetPriority(...)` | 设置进程优先级 ('L', 'B', 'N', 'A', 'H', 'R')。|
+| **工厂函数** | |
+| `proc.exec(cmd, ...)` | 创建新进程，成功则返回 `Process` 对象，失败则返回 `nil, error_code, error_message`。 |
+| `proc.open_by_pid(pid, access)` | 按 PID 打开进程，返回 `Process` 对象。 |
+| `proc.open_by_name(name, access)`| 按名称打开进程，返回 `Process` 对象。 |
+| `proc.current()`| 获取当前进程的 `Process` 对象。 |
+| **静态工具函数** | |
+| `proc.exists(name_or_pid)` | 检查进程是否存在，返回 PID 或 0。 |
+| `proc.find_all(name)` | 查找所有同名进程，返回一个 PID 的 table。 |
+| `proc.terminate_by_pid(pid, code)`| 静态方法：按 PID 终止进程。 |
+| **Process 对象方法** | |
+| `process.pid` | (属性) 进程ID。|
+| `process:handle()` | (方法) 获取底层的 `HANDLE` (不建议手动关闭)。|
+| `process:is_valid()`| 检查进程句柄是否有效。|
+| `process:terminate(code)` | 终止此进程实例。 |
+| `process:terminate_tree()`| 终止此进程实例及其所有子进程。|
+| `process:wait_for_exit(timeout)`| 等待此进程结束。|
+| `process:get_info()`| 返回一个包含详细信息的 Lua table。|
+| `process:get_path()`| 返回进程的可执行文件路径字符串。|
+| `process:get_command_line()`| 返回进程的完整命令行字符串。|
+| **常量与低级接口** | |
+| `proc.constants`| 一个包含常用 WinAPI 常量的 table。|
+| `proc.C_API.*` | 包含所有原始的C风格API函数。 |
+
 
 ## 📄 许可证
 

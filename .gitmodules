@@ -1,0 +1,6 @@
+[submodule "vendor/luajit2"]
+	path = vendor/luajit2
+	url = https://github.com/openresty/luajit2.git
+[submodule "vendor/luaunit"]
+	path = vendor/luaunit
+	url = https://github.com/bluebird75/luaunit.git
