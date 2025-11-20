@@ -2,7 +2,7 @@
 
 `proc_utils-ffi` 是一个基于 LuaJIT FFI 的、轻量级的 Windows 平台进程管理工具库。它是 C++ 库 `proc-utils` 的纯 Lua 重构版本，**无需编译**，仅依赖一个 `proc_utils_ffi.lua` 文件即可运行。
 
-该库提供了一套简洁、健壮且符合 Lua 语言习惯的**面向对象接口**，用于常见的进程管理任务，如查找、创建、终止、等待以及获取详细信息。
+该库提供了一套简洁、健壮且符合 Lua 语言习惯的**纯面向对象接口**，用于常见的进程管理任务，如查找、创建、终止、等待以及获取详细信息。
 
 ## ✨ 功能特性
 
@@ -18,20 +18,20 @@
     -   静态方法 `proc.exists()` 和 `proc.find_all()` 用于快速查询。
 -   **进程创建与执行**:
     -   `proc.exec()`: 创建新进程并返回一个自动管理句柄的 `Process` 对象。
-    -   `proc.C_API.LaunchProcess`: 提供传统的“发后不理”模式。
-    -   `proc.C_API.CreateProcessAsSystem`: 在当前活动桌面以 `SYSTEM` 权限创建进程。
+    -   `proc.exec_as_system()`: 在当前活动桌面以 `SYSTEM` 权限创建进程。
 -   **进程终止**:
     -   `process:terminate()`: 终止进程实例。
     -   `process:terminate_tree()`: 终止进程实例及其所有子进程。
 -   **进程等待**:
     -   `process:wait_for_exit()`: 通过进程句柄高效等待进程结束。
-    -   `proc.C_API.ProcessWait` 和 `proc.C_API.ProcessWaitClose` 提供基于名称的等待。
--   **信息获取**:
+    -   `proc.wait()`: 等待一个进程**出现**。
+    -   `proc.wait_close()`: 等待一个进程**关闭**。
+-   **信息获取与控制**:
     -   `process:get_info()`: 以易于使用的 Lua table 形式返回进程的详细信息（路径、**完整命令行**、内存使用等）。
     -   `process:get_path()` 和 `process:get_command_line()` 提供快捷方法。
--   **低级API可用**: 为了完全的灵活性和兼容性，所有原始的C风格API都保留在 `proc.C_API` 命名空间下。
+    -   `process:set_priority()`: 设置进程的 CPU 优先级。
 
-## 🚀 如何使用 (推荐的 OOP 风格)
+## 🚀 如何使用
 
 将 `proc_utils_ffi.lua` 文件放入你的项目，并 `require` 它。
 
@@ -99,12 +99,13 @@ else
 end
 ```
 
-## 📜 API 参考 (高级 OOP 接口)
+## 📜 API 参考
 
 | 方法/函数 | 描述 |
 | :--- | :--- |
 | **工厂函数** | |
 | `proc.exec(cmd, ...)` | 创建新进程，成功则返回 `Process` 对象，失败则返回 `nil, error_code, error_message`。 |
+| `proc.exec_as_system(cmd, ...)` | 以 SYSTEM 权限创建进程，返回 `Process` 对象。 |
 | `proc.open_by_pid(pid, access)` | 按 PID 打开进程，返回 `Process` 对象。 |
 | `proc.open_by_name(name, access)`| 按名称打开进程，返回 `Process` 对象。 |
 | `proc.current()`| 获取当前进程的 `Process` 对象。 |
@@ -112,6 +113,8 @@ end
 | `proc.exists(name_or_pid)` | 检查进程是否存在，返回 PID 或 0。 |
 | `proc.find_all(name)` | 查找所有同名进程，返回一个 PID 的 table。 |
 | `proc.terminate_by_pid(pid, code)`| 静态方法：按 PID 终止进程。 |
+| `proc.wait(name, timeout)` | 等待指定名称的进程**出现**。成功返回PID，超时返回 `nil`。 |
+| `proc.wait_close(name_or_pid, timeout)` | 等待指定进程**关闭**。 |
 | **Process 对象方法** | |
 | `process.pid` | (属性) 进程ID。|
 | `process:handle()` | (方法) 获取底层的 `HANDLE` (不建议手动关闭)。|
@@ -122,10 +125,9 @@ end
 | `process:get_info()`| 返回一个包含详细信息的 Lua table。|
 | `process:get_path()`| 返回进程的可执行文件路径字符串。|
 | `process:get_command_line()`| 返回进程的完整命令行字符串。|
-| **常量与低级接口** | |
+| `process:set_priority(prio)` | 设置进程优先级。`prio` 是单字符: 'L' (低), 'B' (低于正常), 'N' (正常), 'A' (高于正常), 'H' (高), 'R' (实时)。 |
+| **常量** | |
 | `proc.constants`| 一个包含常用 WinAPI 常量的 table。|
-| `proc.C_API.*` | 包含所有原始的C风格API函数。 |
-
 
 ## 📄 许可证
 
