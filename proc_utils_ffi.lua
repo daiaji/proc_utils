@@ -1,122 +1,38 @@
--- proc_utils_ffi.lua (v3.1.0 - Pure OOP Refactor with Feature Completion)
--- A pure LuaJIT FFI implementation of the proc_utils library for Windows,
--- refactored with a pure and idiomatic Lua OOP interface.
--- Author: Gemini AI
--- Version: 3.1.0
+-- proc_utils_ffi.lua (v3.3.5 - Fix ffi.gc Type Error)
+-- A pure LuaJIT FFI implementation of the proc_utils library for Windows.
+-- Author: Gemini AI (Refactored)
+-- Version: 3.3.5
 
 local ffi = require("ffi")
 
 if ffi.os ~= "Windows" then
     return {
-        _VERSION = "3.1.0",
+        _VERSION = "3.3.5",
         _OS_SUPPORT = false,
         error = "proc_utils-ffi only supports Windows"
     }
 end
 
+-- 1. Load Libraries via lua-ffi-bindings
+-- [FIX] Modified path to match PEShell 'lib/ffi' structure
+local function req(name)
+    return require('ffi.Windows.sdk.' .. name)
+end
+
+-- Load function pointers from DLLs
+local kernel32 = req('kernel32') 
+local psapi    = req('psapi')
+local advapi32 = req('advapi32')
+local wtsapi32 = req('wtsapi32')
+local userenv  = req('userenv')
+local ntdll    = req('ntdll')
+
+-- 'C' namespace is required for static consts defined in cdef
+local C = ffi.C
+local INVALID_HANDLE_VALUE = ffi.cast("HANDLE", -1)
+
+-- Internal Structures for result handling (Helpers specific to this lib)
 ffi.cdef[[
-    /* --- CDEFS remain unchanged --- */
-    /* --- Basic Types --- */
-    typedef unsigned long DWORD;
-    typedef long LONG;
-    typedef void* HANDLE;
-    typedef void* PVOID;
-    typedef int BOOL;
-    typedef unsigned int UINT;
-    typedef wchar_t WCHAR;
-    typedef WCHAR* LPWSTR;
-    typedef const WCHAR* LPCWSTR;
-    typedef unsigned long ULONG;
-    typedef unsigned short WORD;
-    typedef unsigned char BYTE;
-    typedef unsigned long long ULONGLONG;
-
-    /* --- WinAPI Constants --- */
-    static const UINT CP_UTF8 = 65001;
-    static const DWORD TH32CS_SNAPPROCESS = 0x00000002;
-    static const DWORD PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
-    static const DWORD PROCESS_QUERY_INFORMATION = 0x0400;
-    static const DWORD PROCESS_VM_READ = 0x0010;
-    static const DWORD PROCESS_TERMINATE = 0x0001;
-    static const DWORD PROCESS_SET_INFORMATION = 0x0200;
-    static const DWORD PROCESS_ALL_ACCESS = 0x1F0FFF;
-    static const DWORD SYNCHRONIZE = 0x00100000;
-    static const DWORD STARTF_USESHOWWINDOW = 0x00000001;
-    static const DWORD INFINITE = 0xFFFFFFFF;
-    static const DWORD WAIT_TIMEOUT = 258;
-    static const DWORD WAIT_OBJECT_0 = 0;
-    static const DWORD ERROR_INVALID_PARAMETER = 87;
-    static const DWORD ERROR_NOT_FOUND = 1168;
-    static const DWORD MAXIMUM_ALLOWED = 0x02000000;
-    static const DWORD CREATE_UNICODE_ENVIRONMENT = 0x00000400;
-    
-    /* Priority classes */
-    static const DWORD IDLE_PRIORITY_CLASS = 0x00000040;
-    static const DWORD BELOW_NORMAL_PRIORITY_CLASS = 0x00004000;
-    static const DWORD NORMAL_PRIORITY_CLASS = 0x00000020;
-    static const DWORD ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000;
-    static const DWORD HIGH_PRIORITY_CLASS = 0x00000080;
-    static const DWORD REALTIME_PRIORITY_CLASS = 0x00000100;
-
-    /* FormatMessage constants */
-    static const DWORD FORMAT_MESSAGE_ALLOCATE_BUFFER = 0x00100;
-    static const DWORD FORMAT_MESSAGE_FROM_SYSTEM = 0x001000;
-    static const DWORD FORMAT_MESSAGE_IGNORE_INSERTS = 0x000200;
-
-    /* --- Core Structures --- */
-    typedef struct _PROCESSENTRY32W {
-        DWORD dwSize;
-        DWORD cntUsage;
-        DWORD th32ProcessID;
-        uintptr_t th32DefaultHeapID;
-        DWORD th32ModuleID;
-        DWORD cntThreads;
-        DWORD th32ParentProcessID;
-        LONG pcPriClassBase;
-        DWORD dwFlags;
-        WCHAR szExeFile[260];
-    } PROCESSENTRY32W;
-
-    typedef struct _PROCESS_INFORMATION {
-        HANDLE hProcess;
-        HANDLE hThread;
-        DWORD dwProcessId;
-        DWORD dwThreadId;
-    } PROCESS_INFORMATION;
-
-    typedef struct _STARTUPINFOW {
-        DWORD cb;
-        LPWSTR lpReserved;
-        LPWSTR lpDesktop;
-        LPWSTR lpTitle;
-        DWORD dwX;
-        DWORD dwY;
-        DWORD dwXSize;
-        DWORD dwYSize;
-        DWORD dwXCountChars;
-        DWORD dwYCountChars;
-        DWORD dwFillAttribute;
-        DWORD dwFlags;
-        WORD wShowWindow;
-        WORD cbReserved2;
-        BYTE* lpReserved2;
-        HANDLE hStdInput;
-        HANDLE hStdOutput;
-        HANDLE hStdError;
-    } STARTUPINFOW;
-
-    typedef enum _SECURITY_IMPERSONATION_LEVEL {
-      SecurityAnonymous,
-      SecurityIdentification,
-      SecurityImpersonation,
-      SecurityDelegation
-    } SECURITY_IMPERSONATION_LEVEL;
-
-    typedef enum _TOKEN_TYPE {
-      TokenPrimary = 1,
-      TokenImpersonation
-    } TOKEN_TYPE;
-
     typedef struct {
         DWORD pid;
         DWORD parent_pid;
@@ -132,127 +48,22 @@ ffi.cdef[[
         HANDLE process_handle;
         DWORD last_error_code;
     } ProcUtils_ProcessResult;
-
-    typedef struct _UNICODE_STRING {
-        WORD Length;
-        WORD MaximumLength;
-        LPWSTR Buffer;
-    } UNICODE_STRING;
-
-    typedef struct _RTL_USER_PROCESS_PARAMETERS {
-        BYTE Reserved1[16];
-        PVOID Reserved2[10];
-        UNICODE_STRING ImagePathName;
-        UNICODE_STRING CommandLine;
-    } RTL_USER_PROCESS_PARAMETERS;
-
-    typedef struct _PEB {
-        BYTE Reserved1[2];
-        BYTE BeingDebugged;
-        BYTE Reserved2[1];
-        PVOID Reserved3[2];
-        PVOID Ldr;
-        RTL_USER_PROCESS_PARAMETERS* ProcessParameters;
-    } PEB;
-
-    typedef struct _PROCESS_BASIC_INFORMATION {
-        intptr_t ExitStatus;
-        PEB* PebBaseAddress;
-        uintptr_t AffinityMask;
-        int32_t BasePriority;
-        uintptr_t UniqueProcessId;
-        uintptr_t InheritedFromUniqueProcessId;
-    } PROCESS_BASIC_INFORMATION;
-    
-    typedef struct _PROCESS_MEMORY_COUNTERS_EX {
-      DWORD cb;
-      DWORD PageFaultCount;
-      size_t PeakWorkingSetSize;
-      size_t WorkingSetSize;
-      size_t QuotaPeakPagedPoolUsage;
-      size_t QuotaPagedPoolUsage;
-      size_t QuotaPeakNonPagedPoolUsage;
-      size_t QuotaNonPagedPoolUsage;
-      size_t PagefileUsage;
-      size_t PeakPagefileUsage;
-      size_t PrivateUsage;
-    } PROCESS_MEMORY_COUNTERS_EX;
-
-    typedef enum _PROCESSINFOCLASS {
-        ProcessBasicInformation = 0
-    } PROCESSINFOCLASS;
-
-    /* --- Function Prototypes --- */
-    HANDLE CreateToolhelp32Snapshot(DWORD dwFlags, DWORD th32ProcessID);
-    BOOL Process32FirstW(HANDLE hSnapshot, PROCESSENTRY32W* lppe);
-    BOOL Process32NextW(HANDLE hSnapshot, PROCESSENTRY32W* lppe);
-    HANDLE OpenProcess(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwProcessId);
-    BOOL CloseHandle(HANDLE hObject);
-    BOOL QueryFullProcessImageNameW(HANDLE hProcess, DWORD dwFlags, LPWSTR lpExeName, DWORD* lpdwSize);
-    BOOL CreateProcessW(LPCWSTR, LPWSTR, PVOID, PVOID, BOOL, DWORD, PVOID, LPCWSTR, STARTUPINFOW*, PROCESS_INFORMATION*);
-    BOOL TerminateProcess(HANDLE hProcess, UINT uExitCode);
-    DWORD WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds);
-    DWORD GetLastError();
-    void SetLastError(DWORD dwErrCode);
-    BOOL ProcessIdToSessionId(DWORD dwProcessId, DWORD* pSessionId);
-    BOOL ReadProcessMemory(HANDLE, const void*, void*, size_t, size_t*);
-    BOOL SetPriorityClass(HANDLE hProcess, DWORD dwPriorityClass);
-    BOOL CreateProcessAsUserW(HANDLE, LPCWSTR, LPWSTR, PVOID, PVOID, BOOL, DWORD, PVOID, LPCWSTR, STARTUPINFOW*, PROCESS_INFORMATION*);
-    BOOL DuplicateTokenEx(HANDLE, DWORD, PVOID, SECURITY_IMPERSONATION_LEVEL, TOKEN_TYPE, HANDLE*);
-    int MultiByteToWideChar(UINT CodePage, DWORD dwFlags, const char* lpMultiByteStr, int cbMultiByte, LPWSTR lpWideCharStr, int cchWideChar);
-    int WideCharToMultiByte(UINT CodePage, DWORD dwFlags, LPCWSTR lpWideCharStr, int cchWideChar, char* lpMultiByteStr, int cbMultiByte, const char* lpDefaultChar, BOOL* lpUsedDefaultChar);
-    DWORD GetCurrentProcessId();
-    ULONGLONG GetTickCount64(void);
-    DWORD FormatMessageW(DWORD dwFlags, const void* lpSource, DWORD dwMessageId, DWORD dwLanguageId, LPWSTR lpBuffer, DWORD nSize, void* Arguments);
-    HANDLE LocalFree(HANDLE hMem);
-    void Sleep(DWORD dwMilliseconds);
-
-    DWORD GetModuleFileNameExW(HANDLE hProcess, HANDLE hModule, LPWSTR lpFilename, DWORD nSize);
-    BOOL GetProcessMemoryInfo(HANDLE Process, PVOID ppsmemCounters, DWORD cb);
-    long __stdcall NtQueryInformationProcess(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, ULONG*);
-    DWORD WTSGetActiveConsoleSessionId(void);
-    BOOL WTSQueryUserToken(ULONG SessionId, HANDLE *phToken);
-    BOOL CreateEnvironmentBlock(PVOID *lpEnvironment, HANDLE hToken, BOOL bInherit);
-    BOOL DestroyEnvironmentBlock(PVOID lpEnvironment);
 ]]
 
-local C = ffi.C
-local INVALID_HANDLE_VALUE = ffi.cast("HANDLE", -1)
-local kernel32 = ffi.load("kernel32")
-local psapi = ffi.load("psapi")
-local ntdll = ffi.load("ntdll")
-local wtsapi32 = ffi.load("wtsapi32")
-local userenv = ffi.load("userenv")
-local advapi32 = ffi.load("advapi32")
-
 local _M = {
-    _VERSION = "3.1.0",
+    _VERSION = "3.3.5",
     _OS_SUPPORT = true,
 }
 
+-- Public Constants (Mapped from ffi.C)
 _M.constants = {
     SW_HIDE             = 0,
     SW_SHOWNORMAL       = 1,
-    SW_SHOWMINIMIZED    = 2,
-    SW_SHOWMAXIMIZED    = 3,
     SW_SHOW             = 5,
-    PROCESS_ALL_ACCESS              = 0x1F0FFF,
-    PROCESS_TERMINATE               = 0x0001,
-    PROCESS_QUERY_INFORMATION       = 0x0400,
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000,
-    PROCESS_VM_READ                 = 0x0010,
-    PROCESS_SET_INFORMATION         = 0x0200,
-    SYNCHRONIZE                     = 0x00100000,
-    PRIORITY_CLASS_IDLE          = 0x00000040,
-    PRIORITY_CLASS_BELOW_NORMAL  = 0x00004000,
-    PRIORITY_CLASS_NORMAL        = 0x00000020,
-    PRIORITY_CLASS_ABOVE_NORMAL  = 0x00008000,
-    PRIORITY_CLASS_HIGH          = 0x00000080,
-    PRIORITY_CLASS_REALTIME      = 0x00000100,
+    PROCESS_ALL_ACCESS  = C.PROCESS_ALL_ACCESS,
 }
 
--- All former C-API and helper functions are now module-private 'local' functions.
--- They are the implementation details.
+-- Forward declarations
 local wstr_to_str, str_to_wstr, formatWinError
 local forEachProcess, findProcess, getProcessPath, getProcessCommandLine, terminateProcessTree
 local _openProcessByPid, _terminateProcessByPid, _processExists, _findAllProcesses
@@ -437,24 +248,30 @@ _createProcessAsSystem = function(command, working_dir, show_mode)
     local last_error
     repeat
         if not command or command == "" then last_error = C.ERROR_INVALID_PARAMETER; break end
+        
         local session_id = kernel32.WTSGetActiveConsoleSessionId()
         if session_id == 0xFFFFFFFF then last_error = kernel32.GetLastError(); if last_error == 0 then last_error = 1008 end; break end
+        
         local user_token_ptr = ffi.new("HANDLE[1]")
         if wtsapi32.WTSQueryUserToken(session_id, user_token_ptr) == 0 then last_error = kernel32.GetLastError(); if last_error == 0 then last_error = 1008 end; break end
         local user_token = ffi.gc(user_token_ptr[0], kernel32.CloseHandle)
+        
         local primary_token_ptr = ffi.new("HANDLE[1]")
         if advapi32.DuplicateTokenEx(user_token, C.MAXIMUM_ALLOWED, nil, C.SecurityIdentification, C.TokenPrimary, primary_token_ptr) == 0 then last_error = kernel32.GetLastError(); if last_error == 0 then last_error = 5 end; break end
         local primary_token = ffi.gc(primary_token_ptr[0], kernel32.CloseHandle)
+        
         local env_block_ptr = ffi.new("PVOID[1]")
         if userenv.CreateEnvironmentBlock(env_block_ptr, primary_token, false) == 0 then last_error = kernel32.GetLastError(); if last_error == 0 then last_error = 1157 end; break end
         local env_block = ffi.gc(env_block_ptr[0], userenv.DestroyEnvironmentBlock)
+        
         local si = ffi.new("STARTUPINFOW"); si.cb = ffi.sizeof(si)
         si.dwFlags, si.wShowWindow = C.STARTF_USESHOWWINDOW, show_mode or _M.constants.SW_SHOW
         si.lpDesktop = str_to_wstr("winsta0\\default")
         local pi = ffi.new("PROCESS_INFORMATION")
         local cmd_buffer_w = str_to_wstr(command)
         local wd_wstr = str_to_wstr(working_dir)
-        if kernel32.CreateProcessAsUserW(primary_token, nil, cmd_buffer_w, nil, nil, false, C.CREATE_UNICODE_ENVIRONMENT, env_block, wd_wstr, si, pi) == 0 then last_error = kernel32.GetLastError(); if last_error == 0 then last_error = 1157 end; break end
+        
+        if advapi32.CreateProcessAsUserW(primary_token, nil, cmd_buffer_w, nil, nil, false, C.CREATE_UNICODE_ENVIRONMENT, env_block, wd_wstr, si, pi) == 0 then last_error = kernel32.GetLastError(); if last_error == 0 then last_error = 1157 end; break end
         kernel32.CloseHandle(pi.hThread)
         result.pid, result.process_handle, last_error = pi.dwProcessId, pi.hProcess, 0
     until true
@@ -490,7 +307,14 @@ _waitForExit = function(process_handle, timeout_ms)
 end
 
 _setProcessPriority = function(pid, priority)
-    local pmap = {L=C.IDLE_PRIORITY_CLASS,B=C.BELOW_NORMAL_PRIORITY_CLASS,N=C.NORMAL_PRIORITY_CLASS,A=C.ABOVE_NORMAL_PRIORITY_CLASS,H=C.HIGH_PRIORITY_CLASS,R=C.REALTIME_PRIORITY_CLASS}
+    local pmap = {
+        L=C.IDLE_PRIORITY_CLASS,
+        B=C.BELOW_NORMAL_PRIORITY_CLASS,
+        N=C.NORMAL_PRIORITY_CLASS,
+        A=C.ABOVE_NORMAL_PRIORITY_CLASS,
+        H=C.HIGH_PRIORITY_CLASS,
+        R=C.REALTIME_PRIORITY_CLASS
+    }
     local pclass = pmap[priority and priority:upper() or ""]
     if not pclass then
         kernel32.SetLastError(C.ERROR_INVALID_PARAMETER)
@@ -526,9 +350,9 @@ _wait = function(process_name, timeout_ms)
     end
 end
 
--------------------------------------------------------------------------------
--- High-Level OOP Wrapper (The Only Public API)
--------------------------------------------------------------------------------
+-- ============================================================================
+-- OOP Wrapper
+-- ============================================================================
 
 local Process = {}
 Process.__index = Process
@@ -546,6 +370,18 @@ function Process:__gc()
         kernel32.CloseHandle(self._handle)
         self._handle = nil
     end
+end
+
+-- [ADDED] Explicit handle close method for RAII/Deterministic resource management
+function Process:close()
+    if self._handle and self._handle ~= INVALID_HANDLE_VALUE then
+        kernel32.CloseHandle(self._handle)
+        self._handle = nil
+        -- [FIX] Removed ffi.gc(self, nil) because 'self' is a Lua table, not a cdata.
+        -- The __gc logic above handles the nil check perfectly.
+        return true
+    end
+    return false
 end
 
 function _M.exec(command, working_dir, show_mode, desktop_name)
@@ -588,7 +424,7 @@ function _M.open_by_name(name, access)
 end
 
 function _M.current()
-    local pid = ffi.C.GetCurrentProcessId()
+    local pid = kernel32.GetCurrentProcessId()
     return _M.open_by_pid(pid)
 end
 
@@ -690,14 +526,14 @@ function _M.wait(process_name, timeout_ms)
         return pid
     end
     local err_code = kernel32.GetLastError()
-    if err_code == 0 then err_code = C.WAIT_TIMEOUT end -- Ensure error code on timeout
+    if err_code == 0 then err_code = C.WAIT_TIMEOUT end 
     return nil, err_code, formatWinError(err_code)
 end
 
 function _M.wait_close(process_name_or_pid, timeout_ms)
     if not process_name_or_pid or process_name_or_pid == "" then return false end
     local pid = findProcess(process_name_or_pid); if pid == 0 then return true end
-    local h_proc = _openProcessByPid(pid, _M.constants.SYNCHRONIZE)
+    local h_proc = _openProcessByPid(pid, C.SYNCHRONIZE)
     if not h_proc then return false end
     local proc_handle = ffi.gc(h_proc, kernel32.CloseHandle)
     return _waitForExit(proc_handle, timeout_ms or -1)
